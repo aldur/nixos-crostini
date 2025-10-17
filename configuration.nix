@@ -9,7 +9,7 @@
     # ./users.nix
   ];
 
-  networking.hostName = "lxc-nixos";
+  # networking.hostName = lib.mkForce "lxc-nixos";
 
   # Enable flakes: https://nixos.wiki/wiki/Flakes
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
