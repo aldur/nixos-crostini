@@ -44,8 +44,8 @@
             '';
           };
 
-        baguette-tarball =
-          self.nixosConfigurations.baguette-nixos.config.system.build.tarball;
+        baguette-image =
+          self.nixosConfigurations.baguette-nixos.config.system.build.btrfsImage;
 
         default = self.packages.${system}.lxc-image-and-metadata;
       });

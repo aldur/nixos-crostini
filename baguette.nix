@@ -59,11 +59,9 @@
   # Override to create a tarball instead of SD image
   sdImage.compressImage = false;
 
-  # Create a btrfs filesystem tarball
-  system.build.tarball = pkgs.callPackage ({ stdenv, closureInfo, zstd }:
-    let name = "nixos-baguette-rootfs.tar";
-    in stdenv.mkDerivation {
-      inherit name;
+  system.build.tarball = pkgs.callPackage ({ stdenv, closureInfo }:
+    stdenv.mkDerivation {
+      name = "nixos-baguette-rootfs.tar";
 
       buildCommand = ''
         closureInfo=${
@@ -89,10 +87,48 @@
 
         # Create tarball
         echo "Creating tarball..."
-        tar -C rootfs -cf ${name} .
+        tar -C rootfs -cf $out .
 
-        mkdir -p $out
-        mv ${name} $out
+        echo "Done! Tarball created: $out"
       '';
     }) { };
+
+  # TODO: The default subvolume
+  # Build btrfs image using vmTools
+  system.build.btrfsImage = pkgs.vmTools.runInLinuxVM
+    (pkgs.runCommand "nixos-baguette-btrfs.img.zst" {
+      memSize = 4096; # 4GB RAM for the build VM
+      preVM = ''
+        # Create an 8GB raw disk image
+        ${pkgs.qemu}/bin/qemu-img create -f raw disk.img 8G
+      '';
+      QEMU_OPTS = "-drive file=disk.img,if=virtio,cache=unsafe,werror=report";
+      buildInputs = [ pkgs.btrfs-progs pkgs.util-linux pkgs.zstd ];
+    } ''
+      set -x
+
+      # The disk is available as /dev/vda in the VM
+      echo "Formatting /dev/vda as btrfs (with force flag)..."
+      mkfs.btrfs -f -L nixos-root /dev/vda
+
+      # Mount it
+      echo "Mounting filesystem..."
+      mkdir -p /mnt
+      mount /dev/vda /mnt
+
+      # Extract the tarball
+      echo "Extracting rootfs from tarball..."
+      tar -C /mnt -xf ${config.system.build.tarball}
+
+      # Sync and unmount
+      echo "Syncing..."
+      sync
+      umount /mnt
+
+      # Pipe device directly to zstd
+      echo "Compressing image..."
+      dd if=/dev/vda bs=4M | zstd -19 -T0 -o $out
+
+      echo "Done! Image created at $out"
+    '');
 })
