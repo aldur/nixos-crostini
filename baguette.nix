@@ -2,8 +2,7 @@
   imports = [
     ./common.nix
 
-    # Tarball format configuration
-    "${modulesPath}/installer/sd-card/sd-image.nix"
+    "${modulesPath}/profiles/qemu-guest.nix"
   ];
 
   boot.isContainer = false;
@@ -15,30 +14,48 @@
 
   # Filesystem configuration
   fileSystems."/" = {
-    device = lib.mkForce "/dev/vda";
+    device = lib.mkForce "/dev/vdb";
     fsType = lib.mkForce "btrfs";
   };
 
+  # TODO:
+  # https://chromium.googlesource.com/chromiumos/platform2/+/HEAD/vm_tools/baguette_image/src/setup_in_guest.sh?autodive=0
+  # 1. Configure /etc/hosts
+
   networking.hostName = "baguette-nixos";
+
+  system.activationScripts = {
+    # These are ugly HACKs, but they work
+    resolvconf = ''
+      ln -sf /run/resolv.conf /etc/resolv.conf
+    '';
+  };
+
+  users.groups = {
+    kvm = { };
+    netdev = { };
+    sudo = { };
+    tss = { };
+  };
 
   # Create chronos user (as expected by baguette)
   users.users.chronos = {
     isNormalUser = true;
     uid = 1000;
     extraGroups = [
-      "wheel"
-      "video"
       "audio"
       "cdrom"
       "dialout"
       "floppy"
-      "kvm"
-      "netdev"
-      "sudo"
-      "tss"
+      "kvm" # missing
+      "netdev" # missing
+      "sudo" # missing
+      "tss" # missing
       "video"
+      "wheel"
     ];
     initialPassword = "chronos";
+    linger = true;
   };
 
   # ChromeOS VM integration services
@@ -75,9 +92,6 @@
         "PATH=/opt/google/cros-containers/bin:/usr/sbin:/usr/bin:/sbin:/bin";
     };
   };
-
-  # Override to create a tarball instead of SD image
-  sdImage.compressImage = false;
 
   system.build.tarball = pkgs.callPackage ({ stdenv, closureInfo }:
     stdenv.mkDerivation {

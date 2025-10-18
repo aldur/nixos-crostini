@@ -77,7 +77,10 @@ in {
     # Same for the `sftp-server` launched by `garcon`.
     #
     # These are ugly HACKs, but they work
-    xkb = "ln -sf ${pkgs.xkeyboard_config}/share/X11/ /usr/share/";
+    xkb = ''
+      mkdir -p /usr/share/
+      ln -sf ${pkgs.xkeyboard_config}/share/X11/ /usr/share/ans2_dummy_dir/
+    '';
     sftp-server = ''
       mkdir -p /usr/lib/openssh/
       ln -sf ${pkgs.openssh}/libexec/sftp-server /usr/lib/openssh/sftp-server
