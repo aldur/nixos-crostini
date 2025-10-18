@@ -23,6 +23,8 @@
   # 1. Configure /etc/hosts
 
   networking.hostName = "baguette-nixos";
+  networking.useHostResolveConf = true;
+  networking.resolvconf.enable = false;
 
   system.activationScripts = {
     # These are ugly HACKs, but they work
