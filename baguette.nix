@@ -21,6 +21,26 @@
 
   networking.hostName = "baguette-nixos";
 
+  # Create chronos user (as expected by baguette)
+  users.users.chronos = {
+    isNormalUser = true;
+    uid = 1000;
+    extraGroups = [
+      "wheel"
+      "video"
+      "audio"
+      "cdrom"
+      "dialout"
+      "floppy"
+      "kvm"
+      "netdev"
+      "sudo"
+      "tss"
+      "video"
+    ];
+    initialPassword = "chronos";
+  };
+
   # ChromeOS VM integration services
   systemd.mounts = [{
     what = "LABEL=cros-vm-tools";
@@ -93,10 +113,9 @@
       '';
     }) { };
 
-  # TODO: The default subvolume
-  # Build btrfs image using vmTools
+  # Build btrfs image using vmTools with subvolume
   system.build.btrfsImage = pkgs.vmTools.runInLinuxVM
-    (pkgs.runCommand "nixos-baguette-btrfs.img.zst" {
+    (pkgs.runCommand "nixos-baguette-btrfs.img" {
       memSize = 4096; # 4GB RAM for the build VM
       preVM = ''
         # Create an 8GB raw disk image
@@ -108,7 +127,7 @@
       set -x
 
       # The disk is available as /dev/vda in the VM
-      echo "Formatting /dev/vda as btrfs (with force flag)..."
+      echo "Formatting /dev/vda as btrfs..."
       mkfs.btrfs -f -L nixos-root /dev/vda
 
       # Mount it
@@ -116,18 +135,30 @@
       mkdir -p /mnt
       mount /dev/vda /mnt
 
-      # Extract the tarball
-      echo "Extracting rootfs from tarball..."
-      tar -C /mnt -xf ${config.system.build.tarball}
+      # Create a subvolume for the rootfs (matching ChromeOS convention)
+      echo "Creating rootfs subvolume..."
+      btrfs subvolume create /mnt/rootfs_subvol
+
+      # Extract the tarball into the subvolume
+      echo "Extracting rootfs from tarball into subvolume..."
+      tar -C /mnt/rootfs_subvol -xf ${config.system.build.tarball}
+
+      # Get the subvolume ID
+      echo "Getting subvolume ID..."
+      subvol_id=$(btrfs subvolume list /mnt | grep rootfs_subvol | awk '{print $2}')
+      echo "Subvolume ID: $subvol_id"
+
+      # Set the subvolume as default
+      echo "Setting default subvolume..."
+      btrfs subvolume set-default "$subvol_id" /mnt
 
       # Sync and unmount
       echo "Syncing..."
       sync
       umount /mnt
 
-      # Pipe device directly to zstd
-      echo "Compressing image..."
-      dd if=/dev/vda bs=4M | zstd -19 -T0 -o $out
+      # Pipe device directly to $out
+      dd if=/dev/vda bs=4M of=$out
 
       echo "Done! Image created at $out"
     '');
