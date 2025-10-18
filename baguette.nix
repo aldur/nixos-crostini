@@ -29,6 +29,10 @@
     resolvconf = ''
       ln -sf /run/resolv.conf /etc/resolv.conf
     '';
+    usermod = ''
+      mkdir -p /usr/sbin/
+      ln -sf /run/current-system/sw/bin/usermod /usr/sbin/usermod
+    '';
   };
 
   users.groups = {
