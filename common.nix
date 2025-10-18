@@ -79,7 +79,7 @@ in {
     # These are ugly HACKs, but they work
     xkb = ''
       mkdir -p /usr/share/
-      ln -sf ${pkgs.xkeyboard_config}/share/X11/ /usr/share/ans2_dummy_dir/
+      ln -sf ${pkgs.xkeyboard_config}/share/X11/ /usr/share/
     '';
     sftp-server = ''
       mkdir -p /usr/lib/openssh/
