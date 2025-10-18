@@ -163,8 +163,8 @@
       (pkgs.runCommand "nixos-baguette-btrfs.img" {
         memSize = 4096; # 4GB RAM for the build VM
         preVM = ''
-          # Create an 8GB raw disk image
-          ${pkgs.qemu}/bin/qemu-img create -f raw disk.img 8G
+          # Create a 4GB raw disk image
+          ${pkgs.qemu}/bin/qemu-img create -f raw disk.img 4G
         '';
         QEMU_OPTS = "-drive file=disk.img,if=virtio,cache=unsafe,werror=report";
         buildInputs = [ pkgs.btrfs-progs pkgs.util-linux pkgs.zstd ];
