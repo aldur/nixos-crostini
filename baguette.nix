@@ -3,7 +3,8 @@
     baguette-env = builtins.readFile (pkgs.fetchurl {
       url =
         "https://chromium.googlesource.com/chromiumos/platform2/+/HEAD/vm_tools/baguette_image/src/data/etc/profile.d/10-baguette-envs.sh?format=TEXT";
-      hash = "sha256-/poJYX0S7/ni8OJEI3PfBmUtWy8x5WzSnT3MMOEiuoI=";
+      hash = "sha256-Zu4bru2azyqnRGjvVmke49KcC2VdZrHNFV4Zr//po5o=";
+      postFetch = "cat $out | base64 -d | tee $out";
     });
   in {
     imports = [
