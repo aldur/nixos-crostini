@@ -27,6 +27,7 @@
     # TODO:
     # https://chromium.googlesource.com/chromiumos/platform2/+/HEAD/vm_tools/baguette_image/src/setup_in_guest.sh?autodive=0
     # 1. Configure /etc/hosts
+    # 2. Add rw permissions to group and others for /dev/wl0
 
     networking.hostName = "baguette-nixos";
     networking.useHostResolvConf = true;
