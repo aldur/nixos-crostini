@@ -44,6 +44,9 @@
             '';
           };
 
+        baguette-tarball =
+          self.nixosConfigurations.baguette-nixos.config.system.build.tarball;
+
         baguette-image =
           self.nixosConfigurations.baguette-nixos.config.system.build.btrfsImage;
 
