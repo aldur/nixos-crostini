@@ -1,21 +1,19 @@
-({ modulesPath, pkgs, config, lib, ... }: {
+({ modulesPath, pkgs, config, ... }: {
   imports = [
     ./common.nix
 
     "${modulesPath}/profiles/qemu-guest.nix"
+    "${modulesPath}/image/file-options.nix"
   ];
 
   boot.isContainer = false;
   boot.loader.grub.enable = false;
   boot.supportedFilesystems = [ "btrfs" ];
 
-  # Kernel parameters are passed via vmc start, not here
-  boot.kernelParams = [ ];
-
   # Filesystem configuration
   fileSystems."/" = {
-    device = lib.mkForce "/dev/vdb";
-    fsType = lib.mkForce "btrfs";
+    device = "/dev/vdb";
+    fsType = "btrfs";
   };
 
   # TODO:
@@ -23,14 +21,10 @@
   # 1. Configure /etc/hosts
 
   networking.hostName = "baguette-nixos";
-  networking.useHostResolveConf = true;
+  networking.useHostResolvConf = true;
   networking.resolvconf.enable = false;
 
   system.activationScripts = {
-    # These are ugly HACKs, but they work
-    resolvconf = ''
-      ln -sf /run/resolv.conf /etc/resolv.conf
-    '';
     usermod = ''
       mkdir -p /usr/sbin/
       ln -sf /run/current-system/sw/bin/usermod /usr/sbin/usermod
@@ -99,39 +93,47 @@
     };
   };
 
-  system.build.tarball = pkgs.callPackage ({ stdenv, closureInfo }:
-    stdenv.mkDerivation {
-      name = "nixos-baguette-rootfs.tar";
+  image.extension = "tar.xz";
+  image.filePath = "tarball/${config.image.fileName}";
+  system.build.image = config.system.build.tarball;
 
-      buildCommand = ''
-        closureInfo=${
-          closureInfo { rootPaths = [ config.system.build.toplevel ]; }
-        }
-
-        # Create a temporary directory for the rootfs
-        mkdir -p rootfs/nix/store
-
-        # Copy all store paths
-        echo "Copying store paths..."
-        cp -a $(< $closureInfo/store-paths) rootfs/nix/store/
-
-        # Create registration
-        cp $closureInfo/registration rootfs/nix-path-registration
-
-        # Create init symlink
-        ln -s ${config.system.build.toplevel}/init rootfs/init
-
-        # Create necessary directories
-        mkdir -p rootfs/{dev,proc,sys,run,tmp,var,etc,home,root,boot}
-        chmod 1777 rootfs/tmp
-
-        # Create tarball
-        echo "Creating tarball..."
-        tar -C rootfs -cf $out .
-
-        echo "Done! Tarball created: $out"
+  # https://github.com/NixOS/nixpkgs/blob/master/nixos/modules/virtualisation/proxmox-lxc.nix
+  system.build.tarball =
+    pkgs.callPackage "${toString modulesPath}/../lib/make-system-tarball.nix" {
+      fileName = config.image.baseName;
+      storeContents = [{
+        object = config.system.build.toplevel;
+        symlink = "/run/current-system";
+      }];
+      extraCommands = pkgs.writeScript "extra-commands.sh" ''
+        mkdir -p boot dev etc proc sbin sys
       '';
-    }) { };
+      contents = [
+        {
+          source = config.system.build.toplevel + "/init";
+          target = "/sbin/init";
+        }
+        {
+          source = config.system.build.toplevel + "/init";
+          target = "/init";
+        }
+      ];
+    };
+
+  boot.postBootCommands = ''
+    # After booting, register the contents of the Nix store in the Nix
+    # database.
+    if [ -f /nix-path-registration ]; then
+      ${config.nix.package.out}/bin/nix-store --load-db < /nix-path-registration &&
+      rm /nix-path-registration
+    fi
+
+    # nixos-rebuild also requires a "system" profile
+    ${config.nix.package.out}/bin/nix-env -p /nix/var/nix/profiles/system --set /run/current-system
+
+    # rely on host for DNS reolution
+    ln -sf /run/resolv.conf /etc/resolv.conf
+  '';
 
   # Build btrfs image using vmTools with subvolume
   system.build.btrfsImage = pkgs.vmTools.runInLinuxVM
