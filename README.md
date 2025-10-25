@@ -111,8 +111,13 @@ vmc start --vm-type BAGUETTE \
   `baguette_rootfs.img` file. The startup shell will default to user `chronos`.
   See [this issue][4] for some background about this.
 
-If you want to integrate the `baguette.nix` module in your NixOS configuration,
-use this flake's `inputs.nixos-crostini.nixosModules.baguette`.
+If you want to integrate the `baguette.nix` module into your NixOS
+configuration, add this flake's `inputs.nixos-crostini.nixosModules.baguette`
+to your `modules` and then build the image through
+`self.nixosConfigurations.baguette-nixos.config.system.build.btrfsImage`.
+
+To adjust the size of the resulting disk image, set
+`virtualisation.diskImageSize`.
 
 [0]: https://aldur.blog/articles/2025/06/19/nixos-in-crostini
 [1]: https://github.com/DeterminateSystems/nix-installer

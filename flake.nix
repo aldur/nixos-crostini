@@ -47,11 +47,8 @@
         baguette-tarball =
           self.nixosConfigurations.baguette-nixos.config.system.build.tarball;
 
-        baguette-image = let
-          config = self.nixosConfigurations.baguette-nixos.config;
-          img = config.system.build.btrfsImage;
-        in nixpkgs.lib.overrideDerivation img
-        (old: { requiredSystemFeatures = [ ]; }); # Disable `kvm` requirement.
+        baguette-image =
+          self.nixosConfigurations.baguette-nixos.config.system.build.btrfsImage;
 
         default = self.packages.${system}.lxc-image-and-metadata;
       });
