@@ -98,7 +98,7 @@ Open `crosh` (`ctrl-alt-t`) and launch the image:
 
 ```bash
 vmc start --vm-type BAGUETTE \
-  --rootfs /home/chronos/user/MyFiles/Downloads/baguette_rootfs_raw.img \
+  --rootfs /home/chronos/user/MyFiles/Downloads/baguette_rootfs.img \
   --writable-rootfs \
   baguette
 
@@ -107,13 +107,15 @@ vmc start --vm-type BAGUETTE \
 
 > [!NOTE]  
 > Due to Baguette's experimental status, you will need to use `crosh` (instead
-  of the UI) to launch the NixOS VM. The resulting shell will default to user
-  `chronos`.
+  of the UI) to launch the NixOS VM. All changes will be written to the
+  `baguette_rootfs.img` file. The startup shell will default to user `chronos`.
+  See [this issue][4] for some background about this.
 
-If you want to integrate the `baguette.nix` module in your NixOS configuration
-through this flake's output `inputs.nixos-crostini.nixosModules.baguette`.
+If you want to integrate the `baguette.nix` module in your NixOS configuration,
+use this flake's `inputs.nixos-crostini.nixosModules.baguette`.
 
 [0]: https://aldur.blog/articles/2025/06/19/nixos-in-crostini
 [1]: https://github.com/DeterminateSystems/nix-installer
 [2]: https://aldur.blog/micros/2025/07/19/more-ways-to-bootstrap-nixos-containers/
 [3]: https://chromium.googlesource.com/chromiumos/platform2/+/HEAD/vm_tools/baguette_image/
+[4]: https://github.com/aldur/nixos-crostini/issues/1#issuecomment-3418319309
