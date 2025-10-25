@@ -27,11 +27,15 @@
     # TODO:
     # https://chromium.googlesource.com/chromiumos/platform2/+/HEAD/vm_tools/baguette_image/src/setup_in_guest.sh?autodive=0
     # 1. Configure /etc/hosts
-    # 2. Add rw permissions to group and others for /dev/wl0
 
     networking.hostName = "baguette-nixos";
     networking.useHostResolvConf = true;
     networking.resolvconf.enable = false;
+
+    # Add rw permissions to group and others for /dev/wl0
+    services.udev.extraRules = ''
+      KERNEL=="wl0", MODE="0666"
+    '';
 
     # This is a hack to reproduce /etc/profile.d in NixOS
     environment.shellInit = lib.mkBefore baguette-env;
