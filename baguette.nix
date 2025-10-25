@@ -2,7 +2,7 @@
   let
     baguette-env = builtins.readFile (pkgs.fetchurl {
       url =
-        "https://chromium.googlesource.com/chromiumos/platform2/+/HEAD/vm_tools/baguette_image/src/data/etc/profile.d/10-baguette-envs.sh?format=TEXT";
+        "https://chromium.googlesource.com/chromiumos/platform2/+/7f045fc2a99127b3bfa480095c9165c1916cedd8/vm_tools/baguette_image/src/data/etc/profile.d/10-baguette-envs.sh?format=TEXT";
       hash = "sha256-Zu4bru2azyqnRGjvVmke49KcC2VdZrHNFV4Zr//po5o=";
       postFetch = "cat $out | base64 -d | tee $out";
     });
@@ -33,7 +33,7 @@
     networking.useHostResolvConf = true;
     networking.resolvconf.enable = false;
 
-    # This is a hack to replace /etc/profile.d
+    # This is a hack to reproduce /etc/profile.d in NixOS
     environment.shellInit = lib.mkBefore baguette-env;
 
     # https://chromium.googlesource.com/chromiumos/platform2/+/HEAD/vm_tools/baguette_image/src/data/usr/local/lib/systemd/journald.conf.d/50-console.conf?autodive=0%2F%2F%2F
@@ -42,7 +42,7 @@
     '';
 
     system.activationScripts = {
-      # This is a hack so that we can use `vmc start ...`
+      # This is a HACK so that the image starts through `vmc start ...`
       usermod = ''
         mkdir -p /usr/sbin/
         ln -sf /run/current-system/sw/bin/usermod /usr/sbin/usermod
@@ -75,13 +75,8 @@
         "video"
         "wheel"
       ];
-      # TODO: Remove this!
-      initialPassword = "chronos";
       linger = true;
     };
-
-    # TODO: Remove this!
-    security.sudo.wheelNeedsPassword = false;
 
     # ChromeOS VM integration services
     systemd.mounts = [{
@@ -145,6 +140,7 @@
         ];
       };
 
+    # Taken from the lxc container definition.
     boot.postBootCommands = ''
       # After booting, register the contents of the Nix store in the Nix
       # database.
@@ -165,7 +161,7 @@
       (pkgs.runCommand "nixos-baguette-btrfs.img" {
         memSize = 4096; # 4GB RAM for the build VM
         preVM = ''
-          # Create a 4GB raw disk image
+          # And a 4GB raw disk image
           ${pkgs.qemu}/bin/qemu-img create -f raw disk.img 4G
         '';
         QEMU_OPTS = "-drive file=disk.img,if=virtio,cache=unsafe,werror=report";
@@ -204,8 +200,10 @@
         sync
         umount /mnt
 
+        mkdir -p $out
+
         # Pipe device directly to $out
-        dd if=/dev/vda bs=4M of=$out
+        dd if=/dev/vda bs=4M of=$out/baguette_rootfs.img
 
         echo "Done! Image created at $out"
       '');
