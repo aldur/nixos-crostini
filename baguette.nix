@@ -191,6 +191,11 @@
                 toString config.virtualisation.diskImageSize
               }M
             '';
+            postVM = ''
+              mkdir -p $out
+              mv disk.img $out/baguette_rootfs.img
+              echo "Done! Image created at $out"
+            '';
             QEMU_OPTS =
               "-drive file=disk.img,if=virtio,cache=unsafe,werror=report";
             buildInputs = [ pkgs.btrfs-progs pkgs.util-linux pkgs.zstd ];
@@ -227,13 +232,6 @@
             echo "Syncing..."
             sync
             umount /mnt
-
-            mkdir -p $out
-
-            # Pipe device directly to $out
-            dd if=/dev/vda bs=4M of=$out/baguette_rootfs.img
-
-            echo "Done! Image created at $out"
           '');
       in lib.overrideDerivation img (old: {
         requiredSystemFeatures = [ ];
