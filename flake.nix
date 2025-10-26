@@ -8,7 +8,7 @@
   };
   outputs = { nixos-generators, nixpkgs, self, ... }@inputs:
     let
-      modules = [ ./configuration.nix self.nixosModules.default ];
+      modules = [ ./configuration.nix ];
 
       # https://nixos-and-flakes.thiscute.world/nixos-with-flakes/nixos-flake-and-module-system
       specialArgs = { inherit inputs; };
@@ -17,6 +17,9 @@
       forAllSystems = function:
         nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-linux" ]
         (system: function system);
+
+      # NOTE: change to `x86_64-linux` if that is your architecture.
+      targetSystem = "aarch64-linux";
 
     in {
       packages = forAllSystems (system: rec {
@@ -29,29 +32,44 @@
           format = "lxc-metadata";
         };
 
-        default = nixpkgs.legacyPackages.${system}.stdenv.mkDerivation {
-          name = "lxc-image-and-metadata";
-          dontUnpack = true;
+        lxc-image-and-metadata =
+          nixpkgs.legacyPackages.${system}.stdenv.mkDerivation {
+            name = "lxc-image-and-metadata";
+            dontUnpack = true;
 
-          installPhase = ''
-            mkdir -p $out
-            ln -s ${lxc-metadata}/tarball/*.tar.xz $out/metadata.tar.xz
-            ln -s ${lxc}/tarball/*.tar.xz $out/image.tar.xz
-          '';
-        };
+            installPhase = ''
+              mkdir -p $out
+              ln -s ${lxc-metadata}/tarball/*.tar.xz $out/metadata.tar.xz
+              ln -s ${lxc}/tarball/*.tar.xz $out/image.tar.xz
+            '';
+          };
+
+        baguette-tarball =
+          self.nixosConfigurations.baguette-nixos.config.system.build.tarball;
+
+        baguette-image =
+          self.nixosConfigurations.baguette-nixos.config.system.build.btrfsImage;
+
+        default = self.packages.${system}.lxc-image-and-metadata;
       });
 
       # This allows you to re-build the container from inside the container.
       nixosConfigurations.lxc-nixos = nixpkgs.lib.nixosSystem {
-        inherit specialArgs modules;
+        inherit specialArgs;
+        modules = modules ++ [ self.nixosModules.crostini ];
+        system = targetSystem;
+      };
 
-        # NOTE: change to `x86_64-linux` if that is your architecture.
-        system = "aarch64-linux";
+      nixosConfigurations.baguette-nixos = nixpkgs.lib.nixosSystem {
+        inherit specialArgs;
+        system = targetSystem;
+        modules = modules ++ [ self.nixosModules.baguette ];
       };
 
       nixosModules = rec {
-        nixos-crostini = ./crostini.nix;
-        default = nixos-crostini;
+        crostini = ./crostini.nix;
+        baguette = ./baguette.nix;
+        default = crostini;
       };
 
       templates.default = {
