@@ -197,7 +197,7 @@
               echo "Done! Image created at $out"
             '';
             QEMU_OPTS =
-              "-drive file=disk.img,if=virtio,cache=unsafe,werror=report";
+              "-drive file=disk.img,format=raw,if=virtio,cache=unsafe";
             buildInputs = [ pkgs.btrfs-progs pkgs.util-linux pkgs.zstd ];
           } ''
             set -x
