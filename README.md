@@ -117,7 +117,7 @@ to your `modules` and then build the image through
 `self.nixosConfigurations.baguette-nixos.config.system.build.btrfsImage`.
 
 To adjust the size of the resulting disk image, set
-`virtualisation.diskImageSize`.
+`virtualisation.diskImageSize` to the size (in MiB).
 
 [0]: https://aldur.blog/articles/2025/06/19/nixos-in-crostini
 [1]: https://github.com/DeterminateSystems/nix-installer
