@@ -1,6 +1,6 @@
 {
   inputs = {
-    nixpkgs.url = "nixpkgs/nixos-unstable";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     nixos-generators = {
       url = "github:nix-community/nixos-generators";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -52,10 +52,13 @@
         };
 
         baguette-tarball = self.nixosConfigurations.baguette-nixos.config.system.build.tarball;
-
         baguette-image = self.nixosConfigurations.baguette-nixos.config.system.build.btrfsImage;
 
         default = self.packages.${system}.lxc-image-and-metadata;
+      });
+
+      checks = forAllSystems (system: {
+        inherit (self.outputs.packages.${system}) baguette-tarball lxc-image-and-metadata;
       });
 
       # This allows you to re-build the container from inside the container.
