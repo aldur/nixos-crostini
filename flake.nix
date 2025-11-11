@@ -6,7 +6,13 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
-  outputs = { nixos-generators, nixpkgs, self, ... }@inputs:
+  outputs =
+    {
+      nixos-generators,
+      nixpkgs,
+      self,
+      ...
+    }@inputs:
     let
       modules = [ ./configuration.nix ];
 
@@ -14,14 +20,16 @@
       specialArgs = { inherit inputs; };
 
       # https://ayats.org/blog/no-flake-utils
-      forAllSystems = function:
-        nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-linux" ]
-        (system: function system);
+      forAllSystems = nixpkgs.lib.genAttrs [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
 
       # NOTE: change to `x86_64-linux` if that is your architecture.
       targetSystem = "aarch64-linux";
 
-    in {
+    in
+    {
       packages = forAllSystems (system: rec {
         lxc = nixos-generators.nixosGenerate {
           inherit system specialArgs modules;
@@ -32,23 +40,20 @@
           format = "lxc-metadata";
         };
 
-        lxc-image-and-metadata =
-          nixpkgs.legacyPackages.${system}.stdenv.mkDerivation {
-            name = "lxc-image-and-metadata";
-            dontUnpack = true;
+        lxc-image-and-metadata = nixpkgs.legacyPackages.${system}.stdenv.mkDerivation {
+          name = "lxc-image-and-metadata";
+          dontUnpack = true;
 
-            installPhase = ''
-              mkdir -p $out
-              ln -s ${lxc-metadata}/tarball/*.tar.xz $out/metadata.tar.xz
-              ln -s ${lxc}/tarball/*.tar.xz $out/image.tar.xz
-            '';
-          };
+          installPhase = ''
+            mkdir -p $out
+            ln -s ${lxc-metadata}/tarball/*.tar.xz $out/metadata.tar.xz
+            ln -s ${lxc}/tarball/*.tar.xz $out/image.tar.xz
+          '';
+        };
 
-        baguette-tarball =
-          self.nixosConfigurations.baguette-nixos.config.system.build.tarball;
+        baguette-tarball = self.nixosConfigurations.baguette-nixos.config.system.build.tarball;
 
-        baguette-image =
-          self.nixosConfigurations.baguette-nixos.config.system.build.btrfsImage;
+        baguette-image = self.nixosConfigurations.baguette-nixos.config.system.build.btrfsImage;
 
         default = self.packages.${system}.lxc-image-and-metadata;
       });
