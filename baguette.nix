@@ -1,12 +1,21 @@
-({ modulesPath, pkgs, config, lib, ... }:
+(
+  {
+    modulesPath,
+    pkgs,
+    config,
+    lib,
+    ...
+  }:
   let
-    baguette-env = builtins.readFile (pkgs.fetchurl {
-      url =
-        "https://chromium.googlesource.com/chromiumos/platform2/+/7f045fc2a99127b3bfa480095c9165c1916cedd8/vm_tools/baguette_image/src/data/etc/profile.d/10-baguette-envs.sh?format=TEXT";
-      hash = "sha256-Zu4bru2azyqnRGjvVmke49KcC2VdZrHNFV4Zr//po5o=";
-      postFetch = "cat $out | base64 -d | tee $out";
-    });
-  in {
+    baguette-env = builtins.readFile (
+      pkgs.fetchurl {
+        url = "https://chromium.googlesource.com/chromiumos/platform2/+/7f045fc2a99127b3bfa480095c9165c1916cedd8/vm_tools/baguette_image/src/data/etc/profile.d/10-baguette-envs.sh?format=TEXT";
+        hash = "sha256-Zu4bru2azyqnRGjvVmke49KcC2VdZrHNFV4Zr//po5o=";
+        postFetch = "cat $out | base64 -d | tee $out";
+      }
+    );
+  in
+  {
     imports = [
       ./common.nix
 
@@ -33,10 +42,28 @@
     };
 
     config = {
+      boot = {
 
-      boot.isContainer = false;
-      boot.loader.grub.enable = false;
-      boot.supportedFilesystems = [ "btrfs" ];
+        isContainer = false;
+        loader.grub.enable = false;
+        supportedFilesystems = [ "btrfs" ];
+
+        # Taken from the lxc container definition.
+        postBootCommands = ''
+          # After booting, register the contents of the Nix store in the Nix
+          # database.
+          if [ -f /nix-path-registration ]; then
+            ${config.nix.package.out}/bin/nix-store --load-db < /nix-path-registration &&
+            rm /nix-path-registration
+          fi
+
+          # nixos-rebuild also requires a "system" profile
+          ${config.nix.package.out}/bin/nix-env -p /nix/var/nix/profiles/system --set /run/current-system
+
+          # rely on host for DNS reolution
+          ln -sf /run/resolv.conf /etc/resolv.conf
+        '';
+      };
 
       # Filesystem configuration
       fileSystems."/" = {
@@ -44,13 +71,15 @@
         fsType = "btrfs";
       };
 
-      # TODO:
-      # https://chromium.googlesource.com/chromiumos/platform2/+/HEAD/vm_tools/baguette_image/src/setup_in_guest.sh?autodive=0
-      # 1. Configure /etc/hosts
+      networking = {
+        # TODO:
+        # https://chromium.googlesource.com/chromiumos/platform2/+/HEAD/vm_tools/baguette_image/src/setup_in_guest.sh?autodive=0
+        # 1. Configure /etc/hosts
 
-      networking.hostName = "baguette-nixos";
-      networking.useHostResolvConf = true;
-      networking.resolvconf.enable = false;
+        hostName = "baguette-nixos";
+        useHostResolvConf = true;
+        resolvconf.enable = false;
+      };
 
       # Add rw permissions to group and others for /dev/wl0
       services.udev.extraRules = ''
@@ -65,86 +94,24 @@
         ForwardToConsole=yes
       '';
 
-      system.activationScripts = {
-        # This is a HACK so that the image starts through `vmc start ...`
-        usermod = ''
-          mkdir -p /usr/sbin/
-          ln -sf /run/current-system/sw/bin/usermod /usr/sbin/usermod
-        '';
-      };
-
-      # These are the groups expected by default by `vmc start ...`
-      users.groups = {
-        kvm = { };
-        netdev = { };
-        sudo = { };
-        tss = { };
-      };
-
-      # Create chronos user
-      # In theory we should be able to use `vmc start --user`,
-      # but then `vsh` fails expecting `chronos` anyways
-      users.users.chronos = {
-        isNormalUser = true;
-        uid = 1000;
-        extraGroups = [
-          "audio"
-          "cdrom"
-          "dialout"
-          "floppy"
-          "kvm" # missing
-          "netdev" # missing
-          "sudo" # missing
-          "tss" # missing
-          "video"
-          "wheel"
-        ];
-        linger = true;
-      };
-
-      # ChromeOS VM integration services
-      systemd.mounts = [{
-        what = "LABEL=cros-vm-tools";
-        where = "/opt/google/cros-containers";
-        type = "auto";
-        options = "ro";
-        wantedBy = [ "local-fs.target" ];
-        before = [ "local-fs.target" "umount.target" ];
-        conflicts = [ "umount.target" ];
-        unitConfig = { DefaultDependencies = false; };
-        mountConfig = { TimeoutSec = "10"; };
-      }];
-
-      systemd.services.vshd = {
-        description = "vshd";
-        after = [ "opt-google-cros\\x2dcontainers.mount" ];
-        requires = [ "opt-google-cros\\x2dcontainers.mount" ];
-        wantedBy = [ "basic.target" ];
-
-        serviceConfig = { ExecStart = "/opt/google/cros-containers/bin/vshd"; };
-      };
-
-      systemd.services.maitred = {
-        description = "maitred";
-        after = [ "opt-google-cros\\x2dcontainers.mount" ];
-        requires = [ "opt-google-cros\\x2dcontainers.mount" ];
-        wantedBy = [ "basic.target" ];
-
-        serviceConfig = {
-          ExecStart = "/opt/google/cros-containers/bin/maitred";
-          Environment =
-            "PATH=/opt/google/cros-containers/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+      system = {
+        activationScripts = {
+          # This is a HACK so that the image starts through `vmc start ...`
+          usermod = ''
+            mkdir -p /usr/sbin/
+            ln -sf /run/current-system/sw/bin/usermod /usr/sbin/usermod
+          '';
         };
-      };
 
-      # https://github.com/NixOS/nixpkgs/blob/master/nixos/modules/virtualisation/proxmox-lxc.nix
-      system.build.tarball = pkgs.callPackage
-        "${toString modulesPath}/../lib/make-system-tarball.nix" {
+        # https://github.com/NixOS/nixpkgs/blob/master/nixos/modules/virtualisation/proxmox-lxc.nix
+        build.tarball = pkgs.callPackage "${toString modulesPath}/../lib/make-system-tarball.nix" {
           fileName = config.image.baseName;
-          storeContents = [{
-            object = config.system.build.toplevel;
-            symlink = "/run/current-system";
-          }];
+          storeContents = [
+            {
+              object = config.system.build.toplevel;
+              symlink = "/run/current-system";
+            }
+          ];
           extraCommands = pkgs.writeScript "extra-commands.sh" ''
             mkdir -p boot dev etc proc sbin sys
           '';
@@ -164,77 +131,144 @@
           ];
         };
 
-      # Taken from the lxc container definition.
-      boot.postBootCommands = ''
-        # After booting, register the contents of the Nix store in the Nix
-        # database.
-        if [ -f /nix-path-registration ]; then
-          ${config.nix.package.out}/bin/nix-store --load-db < /nix-path-registration &&
-          rm /nix-path-registration
-        fi
+        # Build btrfs image using vmTools with subvolume
+        build.btrfsImage =
+          let
+            img = pkgs.vmTools.runInLinuxVM (
+              pkgs.runCommand "nixos-baguette-btrfs.img"
+                {
+                  memSize = config.virtualisation.buildMemorySize;
+                  preVM = ''
+                    # Create disk image with configured size
+                    ${pkgs.qemu}/bin/qemu-img create -f raw disk.img ${toString config.virtualisation.diskImageSize}M
+                  '';
+                  postVM = ''
+                    mkdir -p $out
+                    mv disk.img $out/baguette_rootfs.img
+                    echo "Done! Image created at $out"
+                  '';
+                  QEMU_OPTS = "-drive file=disk.img,format=raw,if=virtio,cache=unsafe";
+                  buildInputs = [
+                    pkgs.btrfs-progs
+                    pkgs.util-linux
+                  ];
+                }
+                ''
+                  set -x
 
-        # nixos-rebuild also requires a "system" profile
-        ${config.nix.package.out}/bin/nix-env -p /nix/var/nix/profiles/system --set /run/current-system
+                  # The disk is available as /dev/vda in the VM
+                  echo "Formatting /dev/vda as btrfs..."
+                  mkfs.btrfs -f -L nixos-root /dev/vda
 
-        # rely on host for DNS reolution
-        ln -sf /run/resolv.conf /etc/resolv.conf
-      '';
+                  # Mount it
+                  echo "Mounting filesystem..."
+                  mkdir -p /mnt
+                  mount /dev/vda /mnt
 
-      # Build btrfs image using vmTools with subvolume
-      system.build.btrfsImage = let
-        img = pkgs.vmTools.runInLinuxVM
-          (pkgs.runCommand "nixos-baguette-btrfs.img" {
-            memSize = config.virtualisation.buildMemorySize;
-            preVM = ''
-              # Create disk image with configured size
-              ${pkgs.qemu}/bin/qemu-img create -f raw disk.img ${
-                toString config.virtualisation.diskImageSize
-              }M
-            '';
-            postVM = ''
-              mkdir -p $out
-              mv disk.img $out/baguette_rootfs.img
-              echo "Done! Image created at $out"
-            '';
-            QEMU_OPTS =
-              "-drive file=disk.img,format=raw,if=virtio,cache=unsafe";
-            buildInputs = [ pkgs.btrfs-progs pkgs.util-linux pkgs.zstd ];
-          } ''
-            set -x
+                  # Create a subvolume for the rootfs (matching ChromeOS convention)
+                  echo "Creating rootfs subvolume..."
+                  btrfs subvolume create /mnt/rootfs_subvol
 
-            # The disk is available as /dev/vda in the VM
-            echo "Formatting /dev/vda as btrfs..."
-            mkfs.btrfs -f -L nixos-root /dev/vda
+                  # Extract the tarball into the subvolume
+                  echo "Extracting rootfs from tarball into subvolume..."
+                  tar -C /mnt/rootfs_subvol -xf ${config.system.build.tarball}/tarball/*.tar
 
-            # Mount it
-            echo "Mounting filesystem..."
-            mkdir -p /mnt
-            mount /dev/vda /mnt
+                  # Get the subvolume ID
+                  echo "Getting subvolume ID..."
+                  subvol_id=$(btrfs subvolume list /mnt | grep rootfs_subvol | awk '{print $2}')
+                  echo "Subvolume ID: $subvol_id"
 
-            # Create a subvolume for the rootfs (matching ChromeOS convention)
-            echo "Creating rootfs subvolume..."
-            btrfs subvolume create /mnt/rootfs_subvol
+                  # Set the subvolume as default
+                  echo "Setting default subvolume..."
+                  btrfs subvolume set-default "$subvol_id" /mnt
 
-            # Extract the tarball into the subvolume
-            echo "Extracting rootfs from tarball into subvolume..."
-            tar -C /mnt/rootfs_subvol -xf ${config.system.build.tarball}/tarball/*.tar
+                  # Sync and unmount
+                  echo "Syncing..."
+                  sync
+                  umount /mnt
+                ''
+            );
+          in
+          lib.overrideDerivation img (old: {
+            requiredSystemFeatures = [ ];
+          });
+      };
 
-            # Get the subvolume ID
-            echo "Getting subvolume ID..."
-            subvol_id=$(btrfs subvolume list /mnt | grep rootfs_subvol | awk '{print $2}')
-            echo "Subvolume ID: $subvol_id"
+      # These are the groups expected by default by `vmc start ...`
+      users.groups = {
+        kvm = { };
+        netdev = { };
+        sudo = { };
+        tss = { };
+      };
 
-            # Set the subvolume as default
-            echo "Setting default subvolume..."
-            btrfs subvolume set-default "$subvol_id" /mnt
+      # Create chronos user
+      # In theory we should be able to use `vmc start --user`,
+      # but then `vsh` fails expecting `chronos` anyways
+      users.users.aldur = {
+        isNormalUser = true;
+        uid = 1000;
+        extraGroups = [
+          "audio"
+          "cdrom"
+          "dialout"
+          "floppy"
+          "kvm" # missing
+          "netdev" # missing
+          "sudo" # missing
+          "tss" # missing
+          "video"
+          "wheel"
+        ];
+        linger = true;
+      };
 
-            # Sync and unmount
-            echo "Syncing..."
-            sync
-            umount /mnt
-          '');
-      in lib.overrideDerivation img (old: {
-        requiredSystemFeatures = [ ];
-      }); # Allow building even without kvm
+      systemd = {
+        # ChromeOS VM integration services
+        mounts = [
+          {
+            what = "LABEL=cros-vm-tools";
+            where = "/opt/google/cros-containers";
+            type = "auto";
+            options = "ro";
+            wantedBy = [ "local-fs.target" ];
+            before = [
+              "local-fs.target"
+              "umount.target"
+            ];
+            conflicts = [ "umount.target" ];
+            unitConfig = {
+              DefaultDependencies = false;
+            };
+            mountConfig = {
+              TimeoutSec = "10";
+            };
+          }
+        ];
+
+        services.vshd = {
+          description = "vshd";
+          after = [ "opt-google-cros\\x2dcontainers.mount" ];
+          requires = [ "opt-google-cros\\x2dcontainers.mount" ];
+          wantedBy = [ "basic.target" ];
+
+          serviceConfig = {
+            ExecStart = "/opt/google/cros-containers/bin/vshd";
+          };
+        };
+
+        services.maitred = {
+          description = "maitred";
+          after = [ "opt-google-cros\\x2dcontainers.mount" ];
+          requires = [ "opt-google-cros\\x2dcontainers.mount" ];
+          wantedBy = [ "basic.target" ];
+
+          serviceConfig = {
+            ExecStart = "/opt/google/cros-containers/bin/maitred";
+            Environment = "PATH=/opt/google/cros-containers/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+          };
+        };
+      }; # Allow building even without kvm
     };
-  })
+  }
+)
