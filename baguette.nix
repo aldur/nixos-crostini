@@ -43,9 +43,7 @@
 
     config = {
       boot = {
-
         isContainer = false;
-        loader.grub.enable = false;
         supportedFilesystems = [ "btrfs" ];
 
         # Taken from the lxc container definition.
@@ -63,6 +61,9 @@
           # rely on host for DNS reolution
           ln -sf /run/resolv.conf /etc/resolv.conf
         '';
+
+        loader.grub.enable = false;
+        loader.initScript.enable = true;
       };
 
       # Filesystem configuration
