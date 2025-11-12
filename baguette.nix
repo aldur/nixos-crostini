@@ -102,6 +102,8 @@
             mkdir -p /usr/sbin/
             ln -sf /run/current-system/sw/bin/usermod /usr/sbin/usermod
           '';
+
+          modprobe = lib.mkForce "";
         };
 
         # https://github.com/NixOS/nixpkgs/blob/master/nixos/modules/virtualisation/proxmox-lxc.nix
