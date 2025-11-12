@@ -208,7 +208,7 @@
       # Create chronos user
       # In theory we should be able to use `vmc start --user`,
       # but then `vsh` fails expecting `chronos` anyways
-      users.users.aldur = {
+      users.users.chronos = {
         isNormalUser = true;
         uid = 1000;
         extraGroups = [
