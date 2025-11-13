@@ -33,13 +33,15 @@
     # TODO: Replace `aldur` with your username
     aldur = {
       isNormalUser = true;
+
+      # TODO: Baguette only:
+      # Uncomment if the username you want is different from the default
+      # you get when setting up Linux in ChromeOS.
+      # uid = 1001;
+
+      linger = true;
       extraGroups = [ "wheel" ];
     };
-    # TODO: Baguette only:
-    # Uncomment if the username you want is different from the default you get
-    # when setting up Linux in ChromeOS.
-    # uid = 1001;
-    linger = true;
   };
 
   # https://nixos.wiki/wiki/FAQ/When_do_I_update_stateVersion
