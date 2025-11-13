@@ -87,6 +87,8 @@
         KERNEL=="wl0", MODE="0666"
       '';
 
+      # TODO: Permissions for `/dev/kmsg`
+
       # This is a hack to reproduce /etc/profile.d in NixOS
       environment.shellInit = lib.mkBefore baguette-env;
 
@@ -101,6 +103,7 @@
           usermod = ''
             mkdir -p /usr/sbin/
             ln -sf /run/current-system/sw/bin/usermod /usr/sbin/usermod
+            ln -sf /etc/zoneinfo /usr/share/zoneinfo
           '';
 
           modprobe = lib.mkForce "";
@@ -205,26 +208,8 @@
         tss = { };
       };
 
-      # Create chronos user
-      # In theory we should be able to use `vmc start --user`,
-      # but then `vsh` fails expecting `chronos` anyways
-      users.users.chronos = {
-        isNormalUser = true;
-        uid = 1000;
-        extraGroups = [
-          "audio"
-          "cdrom"
-          "dialout"
-          "floppy"
-          "kvm" # missing
-          "netdev" # missing
-          "sudo" # missing
-          "tss" # missing
-          "video"
-          "wheel"
-        ];
-        linger = true;
-      };
+      # NOTE: There's no need to manually create a user here,
+      # since it will be created by `vmc start ...` or equivalent.
 
       systemd = {
         # ChromeOS VM integration services
@@ -268,7 +253,7 @@
 
           serviceConfig = {
             ExecStart = "/opt/google/cros-containers/bin/maitred";
-            Environment = "PATH=/opt/google/cros-containers/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+            Environment = "PATH=/opt/google/cros-containers/bin:/usr/sbin:/usr/bin:/sbin:/bin:/run/current-system/sw/bin";
           };
         };
       }; # Allow building even without kvm
