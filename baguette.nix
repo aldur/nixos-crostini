@@ -26,7 +26,7 @@
     options = with lib; {
       virtualisation.buildMemorySize = mkOption {
         type = types.ints.positive;
-        default = 4096;
+        default = 1024;
         description = ''
           The memory size of the virtual machine used to build the BTRFS image in MiB (1024×1024 bytes).
         '';
@@ -34,7 +34,7 @@
 
       virtualisation.diskImageSize = mkOption {
         type = types.ints.positive;
-        default = 4096;
+        default = 2048;
         description = ''
           The size of the resulting BTRFS image in MiB (1024×1024 bytes).
         '';
