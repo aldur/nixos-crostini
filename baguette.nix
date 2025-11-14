@@ -104,6 +104,8 @@
             mkdir -p /usr/sbin/
             ln -sf /run/current-system/sw/bin/usermod /usr/sbin/usermod
             ln -sf /etc/zoneinfo /usr/share/zoneinfo
+
+            btrfs filesystem resize max /
           '';
 
           modprobe = lib.mkForce "";
