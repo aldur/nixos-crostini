@@ -108,8 +108,8 @@
       system = {
         activationScripts = {
           # This is a HACK so that the image starts through `vmc start ...`
-          usermod = ''
-            ln -sf /etc/zoneinfo /usr/share/zoneinfo
+          baguette = ''
+            ln -sf /etc/zoneinfo /usr/share/
 
             mkdir -p /usr/sbin/
             ln -sf ${pkgs.shadow}/bin/usermod /usr/sbin/usermod
