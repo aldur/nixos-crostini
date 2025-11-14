@@ -85,7 +85,7 @@
         resolvconf.enable = false;
 
         hosts = {
-          arc = [ "100.115.92.2" ];
+          "100.115.92.2" = [ "arc" ];
         };
       };
 
