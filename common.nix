@@ -27,6 +27,14 @@ let
     '';
   };
 
+  low-density-overrides-env = {
+    DISPLAY_VAR = "DISPLAY_LOW_DENSITY";
+    WAYLAND_DISPLAY_VAR = "WAYLAND_DISPLAY_LOW_DENSITY";
+    XCURSOR_SIZE_VAR = "XCURSOR_SIZE_LOW_DENSITY";
+    SOMMELIER_SCALE = "0.5";
+    SOMMELIER_DPI = "72,96,160,240,320,480";
+  };
+
 in
 {
   networking = {
@@ -160,6 +168,8 @@ in
         environment = {
           WAYLAND_DISPLAY_VAR = "WAYLAND_DISPLAY";
           SOMMELIER_SCALE = "1.0";
+          # From `cros-sommelier-override`
+          SOMMELIER_ACCELERATORS = "Super_L,<Alt>bracketleft,<Alt>bracketright,<Alt>tab";
         };
       };
 
@@ -199,6 +209,9 @@ in
           DISPLAY_VAR = "DISPLAY";
           XCURSOR_SIZE_VAR = "XCURSOR_SIZE";
           SOMMELIER_SCALE = "1.0";
+          # From `cros-sommelier-x-override`
+          SOMMELIER_FRAME_COLOR = "#F2F2F2";
+          SOMMELIER_ACCELERATORS = "Super_L,<Alt>bracketleft,<Alt>bracketright,<Alt>tab";
         };
       };
     };
@@ -209,5 +222,8 @@ in
       "sommelier-x@0.service"
       "sommelier-x@1.service"
     ];
+
+    services."sommelier@1".environment = low-density-overrides-env;
+    services."sommelier-x@1".environment = low-density-overrides-env;
   };
 }
