@@ -116,10 +116,7 @@ vmc start --vm-type BAGUETTE baguette
 [aldur@baguette-nixos:~]$
 ```
 
-To launch your NixOS image from the "Terminal" app, run `vmc destroy termina`
-to delete the default Baguette VM and then use `termina` as the VM name in the
-commands above. You can also use `vsh baguette penguin` to open new shell
-sessions from other `crosh` tabs.
+Open new shell sessions with `vsh baguette penguin`.
 
 ### Baguette: NixOS module
 
