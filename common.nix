@@ -224,6 +224,8 @@ in
     ];
 
     services."sommelier@1".environment = low-density-overrides-env;
+    services."sommelier@1".overrideStrategy = "asDropin";
     services."sommelier-x@1".environment = low-density-overrides-env;
+    services."sommelier-x@1".overrideStrategy = "asDropin";
   };
 }
