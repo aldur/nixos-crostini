@@ -30,14 +30,10 @@
 
   # Configure your system-wide user settings (groups, etc), add more users as needed.
   users.users = {
-    # TODO: Replace `aldur` with your username
+    # TODO: Replace `aldur` with the username you picked when configuring Linux
+    # in ChromeOS.
     aldur = {
       isNormalUser = true;
-
-      # TODO: Baguette only:
-      # Uncomment if the username you want is different from the default
-      # you get when setting up Linux in ChromeOS.
-      # uid = 1001;
 
       linger = true;
       extraGroups = [ "wheel" ];
