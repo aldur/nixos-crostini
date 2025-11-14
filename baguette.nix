@@ -207,7 +207,7 @@
               );
             in
             lib.overrideDerivation img (old: {
-              requiredSystemFeatures = [ ];
+              requiredSystemFeatures = [ ]; # Allow building even without kvm
             });
 
           btrfsImageCompressed =
@@ -258,29 +258,44 @@
           }
         ];
 
-        services.vshd = {
-          description = "vshd";
-          after = [ "opt-google-cros\\x2dcontainers.mount" ];
-          requires = [ "opt-google-cros\\x2dcontainers.mount" ];
-          wantedBy = [ "basic.target" ];
+        services = {
+          vshd = {
+            description = "vshd";
+            after = [ "opt-google-cros\\x2dcontainers.mount" ];
+            requires = [ "opt-google-cros\\x2dcontainers.mount" ];
+            wantedBy = [ "basic.target" ];
 
-          serviceConfig = {
-            ExecStart = "/opt/google/cros-containers/bin/vshd";
+            serviceConfig = {
+              ExecStart = "/opt/google/cros-containers/bin/vshd";
+            };
+          };
+
+          maitred = {
+            description = "maitred";
+            after = [ "opt-google-cros\\x2dcontainers.mount" ];
+            requires = [ "opt-google-cros\\x2dcontainers.mount" ];
+            wantedBy = [ "basic.target" ];
+
+            serviceConfig = {
+              ExecStart = "/opt/google/cros-containers/bin/maitred";
+              Environment = "PATH=/opt/google/cros-containers/bin:/usr/sbin:/usr/bin:/sbin:/bin:/run/current-system/sw/bin";
+            };
+          };
+
+          cros-port-listener = {
+            description = "Chromium OS port listener service";
+            after = [ "dev-vsock.device" ];
+            wants = [ "dev-vsock.device" ];
+            wantedBy = [ "default.target" ];
+
+            serviceConfig = {
+              Type = "simple";
+              ExecStart = "/opt/google/cros-containers/bin/port_listener";
+              Restart = "always";
+            };
           };
         };
-
-        services.maitred = {
-          description = "maitred";
-          after = [ "opt-google-cros\\x2dcontainers.mount" ];
-          requires = [ "opt-google-cros\\x2dcontainers.mount" ];
-          wantedBy = [ "basic.target" ];
-
-          serviceConfig = {
-            ExecStart = "/opt/google/cros-containers/bin/maitred";
-            Environment = "PATH=/opt/google/cros-containers/bin:/usr/sbin:/usr/bin:/sbin:/bin:/run/current-system/sw/bin";
-          };
-        };
-      }; # Allow building even without kvm
+      };
     };
   }
 )
