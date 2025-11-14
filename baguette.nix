@@ -284,9 +284,9 @@
 
           cros-port-listener = {
             description = "Chromium OS port listener service";
-            after = [ "dev-vsock.device" ];
-            wants = [ "dev-vsock.device" ];
-            wantedBy = [ "default.target" ];
+            after = [ "opt-google-cros\\x2dcontainers.mount" ];
+            requires = [ "opt-google-cros\\x2dcontainers.mount" ];
+            wantedBy = [ "basic.target" ];
 
             serviceConfig = {
               Type = "simple";
