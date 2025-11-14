@@ -109,11 +109,12 @@
         activationScripts = {
           # This is a HACK so that the image starts through `vmc start ...`
           usermod = ''
-            mkdir -p /usr/sbin/
-            ln -sf /run/current-system/sw/bin/usermod /usr/sbin/usermod
             ln -sf /etc/zoneinfo /usr/share/zoneinfo
 
-            btrfs filesystem resize max /
+            mkdir -p /usr/sbin/
+            ln -sf ${pkgs.shadow}/bin/usermod /usr/sbin/usermod
+
+            ${pkgs.btrfs-progs}/bin/btrfs filesystem resize max /
           '';
 
           modprobe = lib.mkForce "";
