@@ -1,4 +1,5 @@
-{ modulesPath, lib, ... }: {
+{ modulesPath, lib, ... }:
+{
   imports = [
     # Load defaults for running in an lxc container.
     # This is explained in: https://github.com/nix-community/nixos-generators/issues/79

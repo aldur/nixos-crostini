@@ -16,8 +16,6 @@
     # ./users.nix
   ];
 
-  # networking.hostName = lib.mkForce "lxc-nixos";
-
   # Enable flakes: https://nixos.wiki/wiki/Flakes
   nix.settings.experimental-features = [
     "nix-command"
@@ -25,26 +23,24 @@
   ];
 
   # Search for additional packages here: https://search.nixos.org/packages
-  environment.systemPackages = [ pkgs.neovim ];
+  environment.systemPackages = with pkgs; [
+    neovim
+    git
+  ];
 
   # Configure your system-wide user settings (groups, etc), add more users as needed.
   users.users = {
-    # TODO: Replace `aldur` with your username
+    # TODO: Replace `aldur` with the username you picked when configuring Linux
+    # in ChromeOS.
     aldur = {
       isNormalUser = true;
+
+      linger = true;
       extraGroups = [ "wheel" ];
     };
   };
 
-  # This setups a SSH server. Very important if you're setting up a headless system.
-  # Feel free to remove if you don't need it.
-  services.openssh = {
-    enable = true;
-    settings = {
-      PermitRootLogin = "no";
-      PasswordAuthentication = false;
-    };
-  };
+  security.sudo.wheelNeedsPassword = false;
 
   # https://nixos.wiki/wiki/FAQ/When_do_I_update_stateVersion
   system.stateVersion = "25.05";

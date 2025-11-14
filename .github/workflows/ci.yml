@@ -20,3 +20,8 @@ jobs:
       - uses: DeterminateSystems/determinate-nix-action@dbda91f6efef3ee627f56175120aa9543687d830  # v3.11.2
       - uses: DeterminateSystems/flake-checker-action@3164002371bc90729c68af0e24d5aacf20d7c9f6  # v12
       - run: nix flake check
+      - run: nix build .#baguette-zimage
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
+        with:
+          name: zimage
+          path: result/*.zst
