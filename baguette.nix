@@ -83,6 +83,7 @@
         hostName = "baguette-nixos";
         useHostResolvConf = true;
         resolvconf.enable = false;
+        dhcpcd.enable = false;
 
         hosts = {
           "100.115.92.2" = [ "arc" ];
