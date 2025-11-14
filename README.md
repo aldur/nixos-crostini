@@ -118,6 +118,9 @@ vmc start --vm-type BAGUETTE baguette
 
 Open new shell sessions with `vsh baguette penguin`.
 
+See this [blog post][5] for further ways to configure and run a Baguette NixOS
+image.
+
 ### Baguette: NixOS module
 
 This flake's `inputs.nixos-crostini.nixosModules.baguette` module allows
@@ -134,3 +137,4 @@ to fit your NixOS configuration.
 [2]: https://aldur.blog/micros/2025/07/19/more-ways-to-bootstrap-nixos-containers/
 [3]: https://chromium.googlesource.com/chromiumos/platform2/+/HEAD/vm_tools/baguette_image/
 [4]: https://github.com/aldur/nixos-crostini/actions/workflows/ci.yml
+[5]: https://aldur.blog/articles/2025/10/29/nixos-baguette-images-in-chromeos
