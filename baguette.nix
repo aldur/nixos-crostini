@@ -8,10 +8,17 @@
   }:
   let
     baguette-env = builtins.readFile (
-      pkgs.fetchurl {
-        url = "https://chromium.googlesource.com/chromiumos/platform2/+/7f045fc2a99127b3bfa480095c9165c1916cedd8/vm_tools/baguette_image/src/data/etc/profile.d/10-baguette-envs.sh?format=TEXT";
-        hash = "sha256-Zu4bru2azyqnRGjvVmke49KcC2VdZrHNFV4Zr//po5o=";
-        postFetch = "cat $out | base64 -d | tee $out";
+      pkgs.stdenv.mkDerivation {
+        name = "10-baguette-envs.sh";
+        src = pkgs.fetchurl {
+          url = "https://chromium.googlesource.com/chromiumos/platform2/+/051c972a75c15d38c7bab7ac017c7550ca6c24f5/vm_tools/baguette_image/src/data/etc/profile.d/10-baguette-envs.sh?format=TEXT";
+          hash = "sha256-/poJYX0S7/ni8OJEI3PfBmUtWy8x5WzSnT3MMOEiuoI=";
+        };
+        dontBuild = true;
+        dontUnpack = true;
+        installPhase = ''
+          cat $src | base64 -d | tee $out
+        '';
       }
     );
   in
@@ -73,13 +80,13 @@
       };
 
       networking = {
-        # TODO:
-        # https://chromium.googlesource.com/chromiumos/platform2/+/HEAD/vm_tools/baguette_image/src/setup_in_guest.sh?autodive=0
-        # 1. Configure /etc/hosts
-
         hostName = "baguette-nixos";
         useHostResolvConf = true;
         resolvconf.enable = false;
+
+        hosts = {
+          arc = [ "100.115.92.2" ];
+        };
       };
 
       # Add rw permissions to group and others for /dev/wl0
@@ -87,7 +94,8 @@
         KERNEL=="wl0", MODE="0666"
       '';
 
-      # TODO: Permissions for `/dev/kmsg`
+      # NOTE: maitred reports permissions errors for `/dev/kmsg`
+      # but they happen on the standard Debian baguette image as well.
 
       # This is a hack to reproduce /etc/profile.d in NixOS
       environment.shellInit = lib.mkBefore baguette-env;
