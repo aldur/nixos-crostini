@@ -133,7 +133,7 @@ To adjust the size of the resulting disk image, set
 NixOS configuration.
 
 [0]: https://aldur.blog/nixos-crostini
-[1]: https://github.com/DeterminateSystems/nix-installer
+[1]: https://nixos.org/download/
 [2]: https://aldur.blog/micros/2025/07/19/more-ways-to-bootstrap-nixos-containers/
 [3]: https://chromium.googlesource.com/chromiumos/platform2/+/HEAD/vm_tools/baguette_image/
 [4]: https://github.com/aldur/nixos-crostini/actions/workflows/ci.yml
