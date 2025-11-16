@@ -1,36 +1,48 @@
 # `nixos-crostini`: NixOS in ChromeOS
 
-This repository provides a sample configuration to build NixOS containers for
-Crostini (Linux on ChromeOS). The `crostini.nix` module adds support for:
+This repository provides configuration and modules to build NixOS
+[containers](#lxc-containers)/[images](#baguette-images) for Crostini (Linux on
+ChromeOS). The resulting guest supports:
 
-- clipboard sharing with the container,
+- clipboard sharing,
 - handling of URIs, URLs, etc,
 - file sharing,
-- and X/Wayland support, so that the container can run GUI applications.
+- X/Wayland forwarding, so that the guest can run GUI applications,
+- port forwarding from guest to host.
 
-See [this blog post][0] for more details.
+See [this blog post][0] for more details about LXC support and [this one][5]
+for Baguette support.
 
 ## Quick start
 
 1. [Install Nix][1].
 1. Run `nix flake init -t github:aldur/nixos-crostini` from a new directory (or
    simply clone this repository).
-1. Edit the [`./configuration.nix`](./configuration.nix) with your username;
+1. Edit [`./configuration.nix`](./configuration.nix) with your username;
    later on, pick the same when configuring Linux on ChromeOS.
 
-Then:
+Now build a [container image](#lxc-quick-start) or a [VM
+image](#baguette-quick-start).
+
+## LXC containers
+
+Crostini runs [LXC containers in a VM called `termina`][6]. This repository
+provides a Flake output and an NixOS module to build a custom LXC container
+from your configuration.
+
+### LXC: Quick start
 
 ```shell
 # Build the container image and its metadata:
-$ nix build
+$ nix build .#lxc-image-and-metadata
 $ ls result
 image.tar.xz  metadata.tar.xz
 ```
 
-That's it! See [this other blog post][2] for a few ways on how to deploy the
+That's it! See [this blog post][2] for a few ways on how to deploy the
 image on the Chromebook.
 
-## NixOS module
+### LXC: NixOS module
 
 You can also integrate the `crostini.nix` module in your Nix configuration. If
 you are using flakes:
@@ -66,61 +78,63 @@ Here is a _very minimal_ example:
 }
 ```
 
-## Baguette support
+## Baguette images
 
-ChromeOS provides experimental support for Crostini without LXD containers (aka
-[Baguette][3]).
+ChromeOS >= 141 provides experimental support for _containerless_ Crostini (aka
+[Baguette][3]). This repository can build Baguette images that provide the same
+features of LXC containers (clipboard sharing, URIs handling, X/Wayland
+forwarding, etc) but allow more flexibility/freedom (e.g., to run Kubernetes
+without KVM).
 
-This repository allows building Baguette images as well. The resulting VM
-provides the same features as Crostini: clipboard sharing, URIs handling, and
-X/Wayland forwarding, etc.
-
-To try Baguette:
-
-1. Run `nix flake init -t github:aldur/nixos-crostini` from a new directory (or
-   simply clone this repository).
-1. Edit the [`./configuration.nix`](./configuration.nix) with your username.
-
-Then:
+### Baguette: Quick start
 
 ```bash
 # Build the image
-$ nix build .#baguette-image
+$ nix build .#baguette-zimage
 $ ls result
-baguette_rootfs.img
+baguette_rootfs.img.zst
 ```
 
-Now copy the `baguette_rootfs.img` Chromebook "Downloads" directory. If you
-performed the steps above in the default Linux VM in ChromeOS, you can simply
-use the "Files" app.
+> [!TIP]
+> This [CI pipeline][4] builds Baguette images and uploads them as GitHub
+  workflow artifacts. If you fork this repository and commit a change to
+  `./configuration.nix` with your username, the CI will build a Baguette NixOS
+  image with your changes.
 
-Open `crosh` (`ctrl-alt-t`) and launch the image:
+Copy `baguette_rootfs.img.zst` to the Chromebook "Downloads" directory. Open
+`crosh` (<kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>t</kbd>), configure the VM,
+and launch the image:
 
 ```bash
-vmc start --vm-type BAGUETTE \
-  --rootfs /home/chronos/user/MyFiles/Downloads/baguette_rootfs.img \
-  --writable-rootfs \
+vmc create --vm-type BAGUETTE \
+  --size 15G \
+  --source /home/chronos/user/MyFiles/Downloads/baguette_rootfs.img.zst \
   baguette
 
-[chronos@baguette-nixos:~]$
+vmc start --vm-type BAGUETTE baguette
+
+[aldur@baguette-nixos:~]$
 ```
 
-> [!NOTE]  
-> Due to Baguette's experimental status, you will need to use `crosh` (instead
-  of the UI) to launch the NixOS VM. All changes will be written to the
-  `baguette_rootfs.img` file. The startup shell will default to user `chronos`.
-  See [this issue][4] for some background about this.
+Open new shell sessions with `vsh baguette penguin`.
 
-If you want to integrate the `baguette.nix` module into your NixOS
-configuration, add this flake's `inputs.nixos-crostini.nixosModules.baguette`
-to your `modules` and then build the image through
-`self.nixosConfigurations.baguette-nixos.config.system.build.btrfsImage`.
+This [blog post][5] shows further ways to configure, run, and customize a
+Baguette NixOS image.
+
+### Baguette: NixOS module
+
+This flake's `nixosModules.baguette` module allows building the image through
+the output
+`nixosConfigurations.baguette-nixos.config.system.build.btrfsImageCompressed`.
 
 To adjust the size of the resulting disk image, set
-`virtualisation.diskImageSize` to the size (in MiB).
+`virtualisation.diskImageSize` (in MiB). You will need enough space to fit your
+NixOS configuration.
 
-[0]: https://aldur.blog/articles/2025/06/19/nixos-in-crostini
-[1]: https://github.com/DeterminateSystems/nix-installer
+[0]: https://aldur.blog/nixos-crostini
+[1]: https://nixos.org/download/
 [2]: https://aldur.blog/micros/2025/07/19/more-ways-to-bootstrap-nixos-containers/
 [3]: https://chromium.googlesource.com/chromiumos/platform2/+/HEAD/vm_tools/baguette_image/
-[4]: https://github.com/aldur/nixos-crostini/issues/1#issuecomment-3418319309
+[4]: https://github.com/aldur/nixos-crostini/actions/workflows/ci.yml
+[5]: https://aldur.blog/nixos-baguette
+[6]: https://www.chromium.org/chromium-os/developer-library/guides/containers/containers-and-vms/

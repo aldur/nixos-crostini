@@ -8,10 +8,17 @@
   }:
   let
     baguette-env = builtins.readFile (
-      pkgs.fetchurl {
-        url = "https://chromium.googlesource.com/chromiumos/platform2/+/7f045fc2a99127b3bfa480095c9165c1916cedd8/vm_tools/baguette_image/src/data/etc/profile.d/10-baguette-envs.sh?format=TEXT";
-        hash = "sha256-Zu4bru2azyqnRGjvVmke49KcC2VdZrHNFV4Zr//po5o=";
-        postFetch = "cat $out | base64 -d | tee $out";
+      pkgs.stdenv.mkDerivation {
+        name = "10-baguette-envs.sh";
+        src = pkgs.fetchurl {
+          url = "https://chromium.googlesource.com/chromiumos/platform2/+/051c972a75c15d38c7bab7ac017c7550ca6c24f5/vm_tools/baguette_image/src/data/etc/profile.d/10-baguette-envs.sh?format=TEXT";
+          hash = "sha256-/poJYX0S7/ni8OJEI3PfBmUtWy8x5WzSnT3MMOEiuoI=";
+        };
+        dontBuild = true;
+        dontUnpack = true;
+        installPhase = ''
+          cat $src | base64 -d | tee $out
+        '';
       }
     );
   in
@@ -26,7 +33,7 @@
     options = with lib; {
       virtualisation.buildMemorySize = mkOption {
         type = types.ints.positive;
-        default = 4096;
+        default = 1024;
         description = ''
           The memory size of the virtual machine used to build the BTRFS image in MiB (1024×1024 bytes).
         '';
@@ -73,19 +80,23 @@
       };
 
       networking = {
-        # TODO:
-        # https://chromium.googlesource.com/chromiumos/platform2/+/HEAD/vm_tools/baguette_image/src/setup_in_guest.sh?autodive=0
-        # 1. Configure /etc/hosts
-
         hostName = "baguette-nixos";
         useHostResolvConf = true;
         resolvconf.enable = false;
+        dhcpcd.enable = false;
+
+        hosts = {
+          "100.115.92.2" = [ "arc" ];
+        };
       };
 
       # Add rw permissions to group and others for /dev/wl0
       services.udev.extraRules = ''
         KERNEL=="wl0", MODE="0666"
       '';
+
+      # NOTE: maitred reports permissions errors for `/dev/kmsg`
+      # but they happen on the standard Debian baguette image as well.
 
       # This is a hack to reproduce /etc/profile.d in NixOS
       environment.shellInit = lib.mkBefore baguette-env;
@@ -98,103 +109,120 @@
       system = {
         activationScripts = {
           # This is a HACK so that the image starts through `vmc start ...`
-          usermod = ''
+          baguette = ''
+            ln -sf /etc/zoneinfo /usr/share/
+
             mkdir -p /usr/sbin/
-            ln -sf /run/current-system/sw/bin/usermod /usr/sbin/usermod
+            ln -sf ${pkgs.shadow}/bin/usermod /usr/sbin/usermod
+
+            ${pkgs.btrfs-progs}/bin/btrfs filesystem resize max /
           '';
 
           modprobe = lib.mkForce "";
         };
+        build = {
+          # https://github.com/NixOS/nixpkgs/blob/master/nixos/modules/virtualisation/proxmox-lxc.nix
+          tarball = pkgs.callPackage "${toString modulesPath}/../lib/make-system-tarball.nix" {
+            fileName = config.image.baseName;
+            storeContents = [
+              {
+                object = config.system.build.toplevel;
+                symlink = "/run/current-system";
+              }
+            ];
+            extraCommands = pkgs.writeScript "extra-commands.sh" ''
+              mkdir -p boot dev etc proc sbin sys
+            '';
 
-        # https://github.com/NixOS/nixpkgs/blob/master/nixos/modules/virtualisation/proxmox-lxc.nix
-        build.tarball = pkgs.callPackage "${toString modulesPath}/../lib/make-system-tarball.nix" {
-          fileName = config.image.baseName;
-          storeContents = [
-            {
-              object = config.system.build.toplevel;
-              symlink = "/run/current-system";
-            }
-          ];
-          extraCommands = pkgs.writeScript "extra-commands.sh" ''
-            mkdir -p boot dev etc proc sbin sys
-          '';
+            # virt-make-fs, used by
+            # https://chromium.googlesource.com/chromiumos/platform2/+/HEAD/vm_tools/baguette_image/src/generate_disk_image.py
+            # cannot handle compressed tarballs
+            compressCommand = "cat";
+            compressionExtension = "";
 
-          # virt-make-fs, used by
-          # https://chromium.googlesource.com/chromiumos/platform2/+/HEAD/vm_tools/baguette_image/src/generate_disk_image.py
-          # cannot handle compressed tarballs
-          compressCommand = "cat";
-          compressionExtension = "";
+            contents = [
+              # same as baguette Debian image
+              {
+                source = config.system.build.toplevel + "/init";
+                target = "/sbin/init";
+              }
+            ];
+          };
 
-          contents = [
-            # same as baguette Debian image
-            {
-              source = config.system.build.toplevel + "/init";
-              target = "/sbin/init";
-            }
-          ];
+          # Build btrfs image using vmTools with subvolume
+          btrfsImage =
+            let
+              img = pkgs.vmTools.runInLinuxVM (
+                pkgs.runCommand "nixos-baguette-btrfs.img"
+                  {
+                    memSize = config.virtualisation.buildMemorySize;
+                    preVM = ''
+                      # Create disk image with configured size
+                      ${pkgs.qemu}/bin/qemu-img create -f raw disk.img ${toString config.virtualisation.diskImageSize}M
+                    '';
+                    postVM = ''
+                      mkdir -p $out
+                      mv disk.img $out/baguette_rootfs.img
+                      echo "Done! Image created at $out"
+                    '';
+                    QEMU_OPTS = "-drive file=disk.img,format=raw,if=virtio,cache=unsafe";
+                    buildInputs = [
+                      pkgs.btrfs-progs
+                      pkgs.util-linux
+                    ];
+                  }
+                  ''
+                    set -x
+
+                    # The disk is available as /dev/vda in the VM
+                    echo "Formatting /dev/vda as btrfs..."
+                    mkfs.btrfs -f -L nixos-root /dev/vda
+
+                    # Mount it
+                    echo "Mounting filesystem..."
+                    mkdir -p /mnt
+                    mount /dev/vda /mnt
+
+                    # Create a subvolume for the rootfs (matching ChromeOS convention)
+                    echo "Creating rootfs subvolume..."
+                    btrfs subvolume create /mnt/rootfs_subvol
+
+                    # Extract the tarball into the subvolume
+                    echo "Extracting rootfs from tarball into subvolume..."
+                    tar -C /mnt/rootfs_subvol -xf ${config.system.build.tarball}/tarball/*.tar
+
+                    # Get the subvolume ID
+                    echo "Getting subvolume ID..."
+                    subvol_id=$(btrfs subvolume list /mnt | grep rootfs_subvol | awk '{print $2}')
+                    echo "Subvolume ID: $subvol_id"
+
+                    # Set the subvolume as default
+                    echo "Setting default subvolume..."
+                    btrfs subvolume set-default "$subvol_id" /mnt
+
+                    # Sync and unmount
+                    echo "Syncing..."
+                    sync
+                    umount /mnt
+                  ''
+              );
+            in
+            lib.overrideDerivation img (old: {
+              requiredSystemFeatures = [ ]; # Allow building even without kvm
+            });
+
+          btrfsImageCompressed =
+            pkgs.runCommand "nixos-baguette-btrfs-compressed"
+              {
+                nativeBuildInputs = [ pkgs.zstd ];
+              }
+              ''
+                mkdir -p $out
+                echo "Compressing btrfs image with zstd..."
+                zstd -3 -T0 ${config.system.build.btrfsImage}/baguette_rootfs.img -o $out/baguette_rootfs.img.zst
+                echo "Compressed image created at $out/baguette_rootfs.img.zst"
+              '';
         };
-
-        # Build btrfs image using vmTools with subvolume
-        build.btrfsImage =
-          let
-            img = pkgs.vmTools.runInLinuxVM (
-              pkgs.runCommand "nixos-baguette-btrfs.img"
-                {
-                  memSize = config.virtualisation.buildMemorySize;
-                  preVM = ''
-                    # Create disk image with configured size
-                    ${pkgs.qemu}/bin/qemu-img create -f raw disk.img ${toString config.virtualisation.diskImageSize}M
-                  '';
-                  postVM = ''
-                    mkdir -p $out
-                    mv disk.img $out/baguette_rootfs.img
-                    echo "Done! Image created at $out"
-                  '';
-                  QEMU_OPTS = "-drive file=disk.img,format=raw,if=virtio,cache=unsafe";
-                  buildInputs = [
-                    pkgs.btrfs-progs
-                    pkgs.util-linux
-                  ];
-                }
-                ''
-                  set -x
-
-                  # The disk is available as /dev/vda in the VM
-                  echo "Formatting /dev/vda as btrfs..."
-                  mkfs.btrfs -f -L nixos-root /dev/vda
-
-                  # Mount it
-                  echo "Mounting filesystem..."
-                  mkdir -p /mnt
-                  mount /dev/vda /mnt
-
-                  # Create a subvolume for the rootfs (matching ChromeOS convention)
-                  echo "Creating rootfs subvolume..."
-                  btrfs subvolume create /mnt/rootfs_subvol
-
-                  # Extract the tarball into the subvolume
-                  echo "Extracting rootfs from tarball into subvolume..."
-                  tar -C /mnt/rootfs_subvol -xf ${config.system.build.tarball}/tarball/*.tar
-
-                  # Get the subvolume ID
-                  echo "Getting subvolume ID..."
-                  subvol_id=$(btrfs subvolume list /mnt | grep rootfs_subvol | awk '{print $2}')
-                  echo "Subvolume ID: $subvol_id"
-
-                  # Set the subvolume as default
-                  echo "Setting default subvolume..."
-                  btrfs subvolume set-default "$subvol_id" /mnt
-
-                  # Sync and unmount
-                  echo "Syncing..."
-                  sync
-                  umount /mnt
-                ''
-            );
-          in
-          lib.overrideDerivation img (old: {
-            requiredSystemFeatures = [ ];
-          });
       };
 
       # These are the groups expected by default by `vmc start ...`
@@ -205,26 +233,8 @@
         tss = { };
       };
 
-      # Create chronos user
-      # In theory we should be able to use `vmc start --user`,
-      # but then `vsh` fails expecting `chronos` anyways
-      users.users.chronos = {
-        isNormalUser = true;
-        uid = 1000;
-        extraGroups = [
-          "audio"
-          "cdrom"
-          "dialout"
-          "floppy"
-          "kvm" # missing
-          "netdev" # missing
-          "sudo" # missing
-          "tss" # missing
-          "video"
-          "wheel"
-        ];
-        linger = true;
-      };
+      # NOTE: There's no need to manually create a user here,
+      # since it will be created by `vmc start ...` or equivalent.
 
       systemd = {
         # ChromeOS VM integration services
@@ -249,29 +259,44 @@
           }
         ];
 
-        services.vshd = {
-          description = "vshd";
-          after = [ "opt-google-cros\\x2dcontainers.mount" ];
-          requires = [ "opt-google-cros\\x2dcontainers.mount" ];
-          wantedBy = [ "basic.target" ];
+        services = {
+          vshd = {
+            description = "vshd";
+            after = [ "opt-google-cros\\x2dcontainers.mount" ];
+            requires = [ "opt-google-cros\\x2dcontainers.mount" ];
+            wantedBy = [ "basic.target" ];
 
-          serviceConfig = {
-            ExecStart = "/opt/google/cros-containers/bin/vshd";
+            serviceConfig = {
+              ExecStart = "/opt/google/cros-containers/bin/vshd";
+            };
+          };
+
+          maitred = {
+            description = "maitred";
+            after = [ "opt-google-cros\\x2dcontainers.mount" ];
+            requires = [ "opt-google-cros\\x2dcontainers.mount" ];
+            wantedBy = [ "basic.target" ];
+
+            serviceConfig = {
+              ExecStart = "/opt/google/cros-containers/bin/maitred";
+              Environment = "PATH=/opt/google/cros-containers/bin:/usr/sbin:/usr/bin:/sbin:/bin:/run/current-system/sw/bin";
+            };
+          };
+
+          cros-port-listener = {
+            description = "Chromium OS port listener service";
+            after = [ "opt-google-cros\\x2dcontainers.mount" ];
+            requires = [ "opt-google-cros\\x2dcontainers.mount" ];
+            wantedBy = [ "basic.target" ];
+
+            serviceConfig = {
+              Type = "simple";
+              ExecStart = "/opt/google/cros-containers/bin/port_listener";
+              Restart = "always";
+            };
           };
         };
-
-        services.maitred = {
-          description = "maitred";
-          after = [ "opt-google-cros\\x2dcontainers.mount" ];
-          requires = [ "opt-google-cros\\x2dcontainers.mount" ];
-          wantedBy = [ "basic.target" ];
-
-          serviceConfig = {
-            ExecStart = "/opt/google/cros-containers/bin/maitred";
-            Environment = "PATH=/opt/google/cros-containers/bin:/usr/sbin:/usr/bin:/sbin:/bin";
-          };
-        };
-      }; # Allow building even without kvm
+      };
     };
   }
 )
