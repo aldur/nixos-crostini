@@ -10,7 +10,7 @@ fi
 __sommelier_export() {
   local var="$1"
   # We have to resort to eval as POSIX doesn't support ${!var} indirection.
-  if [ -n "$(eval \"[ -z \"\${${var}}\" ] || echo unset\")" ]; then
+  if [ -n "$(eval "[ -z \"\${$var}\" ] || echo unset")" ]; then
     local setting
     # Only export the var if it's been defined.  This might be an account that
     # the user has setup or modified.  No point in spewing errors.
