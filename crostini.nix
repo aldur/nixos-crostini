@@ -17,5 +17,5 @@
   systemd.services."console-getty".enable = false;
   systemd.services."getty@".enable = false;
 
-  networking.hostName = "lxc-nixos";
+  networking.hostName = lib.mkDefault "lxc-nixos";
 }
