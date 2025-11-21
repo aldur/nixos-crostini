@@ -80,7 +80,7 @@
       };
 
       networking = {
-        hostName = "baguette-nixos";
+        hostName = lib.mkDefault "baguette-nixos";
         useHostResolvConf = true;
         resolvconf.enable = false;
         dhcpcd.enable = false;
