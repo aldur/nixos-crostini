@@ -25,8 +25,7 @@
         "aarch64-linux"
       ];
 
-      # NOTE: change to `x86_64-linux` if that is your architecture.
-      targetSystem = "aarch64-linux";
+      targetSystem = "x86_64-linux";
 
     in
     {
