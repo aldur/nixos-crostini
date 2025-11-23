@@ -22,7 +22,6 @@
       # https://ayats.org/blog/no-flake-utils
       forAllSystems = nixpkgs.lib.genAttrs [
         "x86_64-linux"
-        "aarch64-linux"
       ];
 
       targetSystem = "x86_64-linux";
