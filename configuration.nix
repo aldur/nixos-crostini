@@ -1,7 +1,3 @@
-# Originally taken from:
-# https://github.com/Misterio77/nix-starter-configs/blob/cd2634edb7742a5b4bbf6520a2403c22be7013c6/minimal/nixos/configuration.nix
-# This is your system's configuration file.
-# Use this to configure your system environment (it replaces /etc/nixos/configuration.nix)
 {
   # inputs,
   # lib,
@@ -30,11 +26,8 @@
 
   # Configure your system-wide user settings (groups, etc), add more users as needed.
   users.users = {
-    # TODO: Replace `aldur` with the username you picked when configuring Linux
-    # in ChromeOS.
-    aldur = {
+    martin = {
       isNormalUser = true;
-
       linger = true;
       extraGroups = [ "wheel" ];
     };
