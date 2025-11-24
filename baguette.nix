@@ -9,6 +9,13 @@
   let
     crosBin = "/opt/google/cros-containers/bin";
 
+    # Helper to create Crostini system services that depend on the cros-containers mount
+    mkCrosService = serviceConfig: lib.recursiveUpdate {
+      after = [ "opt-google-cros\\x2dcontainers.mount" ];
+      requires = [ "opt-google-cros\\x2dcontainers.mount" ];
+      wantedBy = [ "basic.target" ];
+    } serviceConfig;
+
     baguette-env = builtins.readFile (
       pkgs.stdenv.mkDerivation {
         name = "10-baguette-envs.sh";
@@ -266,35 +273,23 @@
         ];
 
         services = {
-          vshd = {
+          vshd = mkCrosService {
             description = "vshd";
-            after = [ "opt-google-cros\\x2dcontainers.mount" ];
-            requires = [ "opt-google-cros\\x2dcontainers.mount" ];
-            wantedBy = [ "basic.target" ];
-
             serviceConfig = {
               ExecStart = "${crosBin}/vshd";
             };
           };
 
-          maitred = {
+          maitred = mkCrosService {
             description = "maitred";
-            after = [ "opt-google-cros\\x2dcontainers.mount" ];
-            requires = [ "opt-google-cros\\x2dcontainers.mount" ];
-            wantedBy = [ "basic.target" ];
-
             serviceConfig = {
               ExecStart = "${crosBin}/maitred";
               Environment = "PATH=${crosBin}:/usr/sbin:/usr/bin:/sbin:/bin:/run/current-system/sw/bin";
             };
           };
 
-          cros-port-listener = {
+          cros-port-listener = mkCrosService {
             description = "Chromium OS port listener service";
-            after = [ "opt-google-cros\\x2dcontainers.mount" ];
-            requires = [ "opt-google-cros\\x2dcontainers.mount" ];
-            wantedBy = [ "basic.target" ];
-
             serviceConfig = {
               Type = "simple";
               ExecStart = "${crosBin}/port_listener";
