@@ -1,10 +1,13 @@
 {
   lib,
   pkgs,
+  config,
   ...
 }:
 
 let
+  crosBin = "/opt/google/cros-containers/bin";
+
   cros-container-guest-tools-src-version = "4ef17fb17e0617dff3f6e713c79ce89fee4e60f7";
 
   cros-container-guest-tools-src = pkgs.fetchgit {
@@ -37,7 +40,23 @@ let
 
 in
 {
-  networking = {
+  options = {
+    crostini.defaultUser = lib.mkOption {
+      type = lib.types.str;
+      default = null;
+      example = "myuser";
+      description = ''
+        The default user to create for the Crostini container/VM.
+        This user will have sudo privileges and systemd linger enabled.
+        Set this to your desired username - it should match the username
+        you configure when setting up Linux on ChromeOS.
+      '';
+    };
+  };
+
+  config = lib.mkMerge [
+    {
+      networking = {
     # The eth0 interface in this container/VM can only be accessed from the host.
     firewall.enable = false;
 
@@ -51,19 +70,20 @@ in
   };
 
   # Disable nixos documentation because it is annoying to build.
+  # This trades off smaller images for local documentation availability.
   documentation.nixos.enable = lib.mkForce false;
 
   # Make sure documentation for NixOS programs are installed.
   # This is disabled by lxc-container.nix in imports.
+  # Keeping this enabled allows man pages and program-specific docs to be available.
   documentation.enable = lib.mkForce true;
 
   environment = {
-    systemPackages = [
+    systemPackages = with pkgs; [
       cros-container-guest-tools
-
-      pkgs.wl-clipboard # wl-copy / wl-paste
-      pkgs.xdg-utils # xdg-open
-      pkgs.usbutils # lsusb
+      wl-clipboard # wl-copy / wl-paste
+      xdg-utils # xdg-open
+      usbutils # lsusb
     ];
 
     etc = {
@@ -123,9 +143,9 @@ in
         description = "Chromium OS Garcon Bridge";
         wantedBy = [ "default.target" ];
         serviceConfig = {
-          ExecStart = "/opt/google/cros-containers/bin/garcon --server";
+          ExecStart = "${crosBin}/garcon --server";
           Type = "simple";
-          ExecStopPost = "/opt/google/cros-containers/bin/guest_service_failure_notifier cros-garcon";
+          ExecStopPost = "${crosBin}/guest_service_failure_notifier cros-garcon";
           Restart = "always";
         };
         environment = {
@@ -153,7 +173,7 @@ in
         serviceConfig = {
           Type = "notify";
           ExecStart = ''
-            /opt/google/cros-containers/bin/sommelier \
+            ${crosBin}/sommelier \
                           --parent \
                           --sd-notify="READY=1" \
                           --socket=wayland-%i \
@@ -163,7 +183,7 @@ in
                               "systemctl --user set-environment ''${WAYLAND_DISPLAY_VAR}=$''${WAYLAND_DISPLAY}; \
                                systemctl --user import-environment SOMMELIER_VERSION"
           '';
-          ExecStopPost = "/opt/google/cros-containers/bin/guest_service_failure_notifier sommelier";
+          ExecStopPost = "${crosBin}/guest_service_failure_notifier sommelier";
         };
         environment = {
           WAYLAND_DISPLAY_VAR = "WAYLAND_DISPLAY";
@@ -185,7 +205,7 @@ in
         serviceConfig = {
           Type = "notify";
           ExecStart = ''
-            /opt/google/cros-containers/bin/sommelier \
+            ${crosBin}/sommelier \
               -X \
               --x-display=%i \
               --sd-notify="READY=1" \
@@ -202,7 +222,7 @@ in
                    xauth -f ''${HOME}/.Xauthority add :%i . $(xxd -l 16 -p /dev/urandom); \
                    . /etc/sommelierrc"
           '';
-          ExecStopPost = "/opt/google/cros-containers/bin/guest_service_failure_notifier sommelier-x";
+          ExecStopPost = "${crosBin}/guest_service_failure_notifier sommelier-x";
         };
         environment = {
           # TODO: Set `SOMMELIER_XFONT_PATH`
@@ -228,4 +248,15 @@ in
     services."sommelier-x@1".environment = low-density-overrides-env;
     services."sommelier-x@1".overrideStrategy = "asDropin";
   };
+    }
+
+    # Conditionally create the default user if crostini.defaultUser is set
+    (lib.mkIf (config.crostini.defaultUser != null) {
+      users.users.${config.crostini.defaultUser} = {
+        isNormalUser = true;
+        linger = true;
+        extraGroups = [ "wheel" ];
+      };
+    })
+  ];
 }

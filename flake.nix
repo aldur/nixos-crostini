@@ -20,11 +20,8 @@
       specialArgs = { inherit inputs; };
 
       # https://ayats.org/blog/no-flake-utils
-      forAllSystems = nixpkgs.lib.genAttrs [
-        "x86_64-linux"
-      ];
-
-      targetSystem = "x86_64-linux";
+      systems = [ "x86_64-linux" ];
+      forAllSystems = nixpkgs.lib.genAttrs systems;
 
     in
     {
@@ -49,9 +46,9 @@
           '';
         };
 
-        baguette-tarball = self.nixosConfigurations.baguette-nixos.config.system.build.tarball;
-        baguette-image = self.nixosConfigurations.baguette-nixos.config.system.build.btrfsImage;
-        baguette-zimage = self.nixosConfigurations.baguette-nixos.config.system.build.btrfsImageCompressed;
+        baguette-tarball = self.nixosConfigurations."baguette-nixos-${system}".config.system.build.tarball;
+        baguette-image = self.nixosConfigurations."baguette-nixos-${system}".config.system.build.btrfsImage;
+        baguette-zimage = self.nixosConfigurations."baguette-nixos-${system}".config.system.build.btrfsImageCompressed;
 
         default = self.packages.${system}.lxc-image-and-metadata;
       });
@@ -61,17 +58,33 @@
       });
 
       # This allows you to re-build the container from inside the container.
-      nixosConfigurations.lxc-nixos = nixpkgs.lib.nixosSystem {
-        inherit specialArgs;
-        modules = modules ++ [ self.nixosModules.crostini ];
-        system = targetSystem;
-      };
-
-      nixosConfigurations.baguette-nixos = nixpkgs.lib.nixosSystem {
-        inherit specialArgs;
-        system = targetSystem;
-        modules = modules ++ [ self.nixosModules.baguette ];
-      };
+      nixosConfigurations = nixpkgs.lib.listToAttrs (
+        builtins.map (system: {
+          name = "lxc-nixos-${system}";
+          value = nixpkgs.lib.nixosSystem {
+            inherit system specialArgs;
+            modules = modules ++ [ self.nixosModules.crostini ];
+          };
+        }) systems
+        ++ builtins.map (system: {
+          name = "baguette-nixos-${system}";
+          value = nixpkgs.lib.nixosSystem {
+            inherit system specialArgs;
+            modules = modules ++ [ self.nixosModules.baguette ];
+          };
+        }) systems
+        # Keep backwards compatibility with old names
+        ++ [
+          {
+            name = "lxc-nixos";
+            value = self.nixosConfigurations."lxc-nixos-x86_64-linux";
+          }
+          {
+            name = "baguette-nixos";
+            value = self.nixosConfigurations."baguette-nixos-x86_64-linux";
+          }
+        ]
+      );
 
       nixosModules = rec {
         crostini = ./crostini.nix;

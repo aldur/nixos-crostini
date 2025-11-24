@@ -24,14 +24,10 @@
     git
   ];
 
-  # Configure your system-wide user settings (groups, etc), add more users as needed.
-  users.users = {
-    martin = {
-      isNormalUser = true;
-      linger = true;
-      extraGroups = [ "wheel" ];
-    };
-  };
+  # Set the default Crostini user.
+  # IMPORTANT: Change "martin" to your desired username.
+  # This should match the username you configure when setting up Linux on ChromeOS.
+  crostini.defaultUser = "martin";
 
   security.sudo.wheelNeedsPassword = false;
 

@@ -7,6 +7,8 @@
     ...
   }:
   let
+    crosBin = "/opt/google/cros-containers/bin";
+
     baguette-env = builtins.readFile (
       pkgs.stdenv.mkDerivation {
         name = "10-baguette-envs.sh";
@@ -34,6 +36,7 @@
       virtualisation.buildMemorySize = mkOption {
         type = types.ints.positive;
         default = 1024;
+        example = 2048;
         description = ''
           The memory size of the virtual machine used to build the BTRFS image in MiB (1024×1024 bytes).
         '';
@@ -42,8 +45,11 @@
       virtualisation.diskImageSize = mkOption {
         type = types.ints.positive;
         default = 4096;
+        example = 8192;
+        defaultText = lib.literalExpression "4096";
         description = ''
           The size of the resulting BTRFS image in MiB (1024×1024 bytes).
+          Recommended values: 4096 (4GB) for minimal setups, 8192 (8GB) or more for development environments.
         '';
       };
     };
@@ -267,7 +273,7 @@
             wantedBy = [ "basic.target" ];
 
             serviceConfig = {
-              ExecStart = "/opt/google/cros-containers/bin/vshd";
+              ExecStart = "${crosBin}/vshd";
             };
           };
 
@@ -278,8 +284,8 @@
             wantedBy = [ "basic.target" ];
 
             serviceConfig = {
-              ExecStart = "/opt/google/cros-containers/bin/maitred";
-              Environment = "PATH=/opt/google/cros-containers/bin:/usr/sbin:/usr/bin:/sbin:/bin:/run/current-system/sw/bin";
+              ExecStart = "${crosBin}/maitred";
+              Environment = "PATH=${crosBin}:/usr/sbin:/usr/bin:/sbin:/bin:/run/current-system/sw/bin";
             };
           };
 
@@ -291,7 +297,7 @@
 
             serviceConfig = {
               Type = "simple";
-              ExecStart = "/opt/google/cros-containers/bin/port_listener";
+              ExecStart = "${crosBin}/port_listener";
               Restart = "always";
             };
           };
