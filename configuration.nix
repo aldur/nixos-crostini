@@ -1,36 +1,25 @@
+{ config, pkgs, ... }:
 {
-  # inputs,
-  # lib,
-  # config,
-  pkgs,
-  ...
-}:
-{
-  imports = [
-    # You can import other NixOS modules here.
-    # You can also split up your configuration and import pieces of it here:
-    # ./users.nix
-  ];
+  # Base system config shared by both crostini and baguette
 
-  # Enable flakes: https://nixos.wiki/wiki/Flakes
-  nix.settings.experimental-features = [
-    "nix-command"
-    "flakes"
-  ];
+  networking.hostName = "nixos";
 
-  # Search for additional packages here: https://search.nixos.org/packages
-  environment.systemPackages = with pkgs; [
-    neovim
-    git
-  ];
+  time.timeZone = "UTC";
 
-  # Set the default Crostini user.
-  # IMPORTANT: Change "martin" to your desired username.
-  # This should match the username you configure when setting up Linux on ChromeOS.
-  crostini.defaultUser = "martin";
+  i18n.defaultLocale = "en_US.UTF-8";
+
+  users.users.martin = {
+    isNormalUser = true;
+    extraGroups = [ "wheel" ];
+    initialPassword = "changeme"; # adjust/remove for real use
+  };
+
+  services.openssh = {
+    enable = true;
+    settings.PasswordAuthentication = false;
+  };
 
   security.sudo.wheelNeedsPassword = false;
 
-  # https://nixos.wiki/wiki/FAQ/When_do_I_update_stateVersion
-  system.stateVersion = "25.05";
+  # Add anything else you want shared between crostini/baguette builds
 }
