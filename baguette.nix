@@ -91,8 +91,9 @@
       };
 
       # Add rw permissions to group and others for /dev/wl0
+      # https://chromium.googlesource.com/chromiumos/containers/cros-container-guest-tools/+/6d62810ff0231fbccbc1b0279e695842d88d6c5c/cros-wayland/10-cros-virtwl.rules
       services.udev.extraRules = ''
-        KERNEL=="wl0", MODE="0666"
+        KERNEL=="wl*", MODE="0666"
       '';
 
       # NOTE: maitred reports permissions errors for `/dev/kmsg`
@@ -106,124 +107,138 @@
         ForwardToConsole=yes
       '';
 
-      system = {
-        activationScripts = {
-          # This is a HACK so that the image starts through `vmc start ...`
-          baguette = ''
-            ln -sf /etc/zoneinfo /usr/share/
+      system =
+        let
+          # https://github.com/jmbaur/nixpkgs/blob/115c1d69015de09f4211890477af05ba4fb873b9/nixos/modules/virtualisation/lxc-container.nix#L18-L19
+          initScript = if config.boot.initrd.systemd.enable then "prepare-root" else "init";
+        in
+        {
+          activationScripts = {
 
-            mkdir -p /usr/sbin/
-            ln -sf ${pkgs.shadow}/bin/usermod /usr/sbin/usermod
-
-            ${pkgs.btrfs-progs}/bin/btrfs filesystem resize max /
-          '';
-
-          modprobe = lib.mkForce "";
-        };
-        build = {
-          # https://github.com/NixOS/nixpkgs/blob/master/nixos/modules/virtualisation/proxmox-lxc.nix
-          tarball = pkgs.callPackage "${toString modulesPath}/../lib/make-system-tarball.nix" {
-            fileName = config.image.baseName;
-            storeContents = [
-              {
-                object = config.system.build.toplevel;
-                symlink = "/run/current-system";
-              }
-            ];
-            extraCommands = pkgs.writeScript "extra-commands.sh" ''
-              mkdir -p boot dev etc proc sbin sys
+            baguette = ''
+              ln -sf /etc/zoneinfo /usr/share/
+            ''
+            +
+              # HACK: `vmc start ...` requires /usr/sbin/usermod
+              ''
+                mkdir -p /usr/sbin/
+                ln -sf ${pkgs.shadow}/bin/usermod /usr/sbin/usermod
+              ''
+            # Resize the avaialble space to the one provided by Baguette
+            + ''
+              ${pkgs.btrfs-progs}/bin/btrfs filesystem resize max /
+            ''
+            # Re-link the initScript (in case of toggling `boot.initrd.systemd.enable`)
+            + ''
+              ln -sf "$systemConfig/${initScript}" /sbin/init
             '';
 
-            # virt-make-fs, used by
-            # https://chromium.googlesource.com/chromiumos/platform2/+/HEAD/vm_tools/baguette_image/src/generate_disk_image.py
-            # cannot handle compressed tarballs
-            compressCommand = "cat";
-            compressionExtension = "";
-
-            contents = [
-              # same as baguette Debian image
-              {
-                source = config.system.build.toplevel + "/init";
-                target = "/sbin/init";
-              }
-            ];
+            # https://github.com/aldur/nixos-crostini/issues/3#issuecomment-3481799191
+            modprobe = lib.mkForce "";
           };
 
-          # Build btrfs image using vmTools with subvolume
-          btrfsImage =
-            let
-              img = pkgs.vmTools.runInLinuxVM (
-                pkgs.runCommand "nixos-baguette-btrfs.img"
-                  {
-                    memSize = config.virtualisation.buildMemorySize;
-                    preVM = ''
-                      # Create disk image with configured size
-                      ${pkgs.qemu}/bin/qemu-img create -f raw disk.img ${toString config.virtualisation.diskImageSize}M
-                    '';
-                    postVM = ''
-                      mkdir -p $out
-                      mv disk.img $out/baguette_rootfs.img
-                      echo "Done! Image created at $out"
-                    '';
-                    QEMU_OPTS = "-drive file=disk.img,format=raw,if=virtio,cache=unsafe";
-                    buildInputs = [
-                      pkgs.btrfs-progs
-                      pkgs.util-linux
-                    ];
-                  }
-                  ''
-                    set -x
+          build = {
+            # https://github.com/NixOS/nixpkgs/blob/master/nixos/modules/virtualisation/proxmox-lxc.nix
+            tarball = pkgs.callPackage "${toString modulesPath}/../lib/make-system-tarball.nix" {
+              fileName = config.image.baseName;
+              storeContents = [
+                {
+                  object = config.system.build.toplevel;
+                  symlink = "/run/current-system";
+                }
+              ];
+              extraCommands = "mkdir -p proc sys dev";
 
-                    # The disk is available as /dev/vda in the VM
-                    echo "Formatting /dev/vda as btrfs..."
-                    mkfs.btrfs -f -L nixos-root /dev/vda
+              # virt-make-fs, used by
+              # https://chromium.googlesource.com/chromiumos/platform2/+/HEAD/vm_tools/baguette_image/src/generate_disk_image.py
+              # cannot handle compressed tarballs
+              compressCommand = "cat";
+              compressionExtension = "";
 
-                    # Mount it
-                    echo "Mounting filesystem..."
-                    mkdir -p /mnt
-                    mount /dev/vda /mnt
+              contents = [
+                # same as baguette Debian image
+                {
+                  source = config.system.build.toplevel + "/${initScript}";
+                  target = "/sbin/init";
+                }
+              ];
+            };
 
-                    # Create a subvolume for the rootfs (matching ChromeOS convention)
-                    echo "Creating rootfs subvolume..."
-                    btrfs subvolume create /mnt/rootfs_subvol
+            # Build btrfs image using vmTools with subvolume
+            btrfsImage =
+              let
+                img = pkgs.vmTools.runInLinuxVM (
+                  pkgs.runCommand "nixos-baguette-btrfs.img"
+                    {
+                      memSize = config.virtualisation.buildMemorySize;
+                      preVM = ''
+                        # Create disk image with configured size
+                        ${pkgs.qemu}/bin/qemu-img create -f raw disk.img ${toString config.virtualisation.diskImageSize}M
+                      '';
+                      postVM = ''
+                        mkdir -p $out
+                        mv disk.img $out/baguette_rootfs.img
+                        echo "Done! Image created at $out"
+                      '';
+                      QEMU_OPTS = "-drive file=disk.img,format=raw,if=virtio,cache=unsafe";
+                      buildInputs = [
+                        pkgs.btrfs-progs
+                        pkgs.util-linux
+                      ];
+                    }
+                    ''
+                      set -x
 
-                    # Extract the tarball into the subvolume
-                    echo "Extracting rootfs from tarball into subvolume..."
-                    tar -C /mnt/rootfs_subvol -xf ${config.system.build.tarball}/tarball/*.tar
+                      # The disk is available as /dev/vda in the VM
+                      echo "Formatting /dev/vda as btrfs..."
+                      mkfs.btrfs -f -L nixos-root /dev/vda
 
-                    # Get the subvolume ID
-                    echo "Getting subvolume ID..."
-                    subvol_id=$(btrfs subvolume list /mnt | grep rootfs_subvol | awk '{print $2}')
-                    echo "Subvolume ID: $subvol_id"
+                      # Mount it
+                      echo "Mounting filesystem..."
+                      mkdir -p /mnt
+                      mount /dev/vda /mnt
 
-                    # Set the subvolume as default
-                    echo "Setting default subvolume..."
-                    btrfs subvolume set-default "$subvol_id" /mnt
+                      # Create a subvolume for the rootfs (matching ChromeOS convention)
+                      echo "Creating rootfs subvolume..."
+                      btrfs subvolume create /mnt/rootfs_subvol
 
-                    # Sync and unmount
-                    echo "Syncing..."
-                    sync
-                    umount /mnt
-                  ''
-              );
-            in
-            lib.overrideDerivation img (old: {
-              requiredSystemFeatures = [ ]; # Allow building even without kvm
-            });
+                      # Extract the tarball into the subvolume
+                      echo "Extracting rootfs from tarball into subvolume..."
+                      tar -C /mnt/rootfs_subvol -xf ${config.system.build.tarball}/tarball/*.tar
 
-          btrfsImageCompressed =
-            pkgs.runCommand "nixos-baguette-btrfs-compressed"
-              {
-                nativeBuildInputs = [ pkgs.zstd ];
-              }
-              ''
-                mkdir -p $out
-                echo "Compressing btrfs image with zstd..."
-                zstd -3 -T0 ${config.system.build.btrfsImage}/baguette_rootfs.img -o $out/baguette_rootfs.img.zst
-                echo "Compressed image created at $out/baguette_rootfs.img.zst"
-              '';
+                      # Get the subvolume ID
+                      echo "Getting subvolume ID..."
+                      subvol_id=$(btrfs subvolume list /mnt | grep rootfs_subvol | awk '{print $2}')
+                      echo "Subvolume ID: $subvol_id"
+
+                      # Set the subvolume as default
+                      echo "Setting default subvolume..."
+                      btrfs subvolume set-default "$subvol_id" /mnt
+
+                      # Sync and unmount
+                      echo "Syncing..."
+                      sync
+                      umount /mnt
+                    ''
+                );
+              in
+              lib.overrideDerivation img (old: {
+                requiredSystemFeatures = [ ]; # Allow building even without kvm
+              });
+
+            btrfsImageCompressed =
+              pkgs.runCommand "nixos-baguette-btrfs-compressed"
+                {
+                  nativeBuildInputs = [ pkgs.zstd ];
+                }
+                ''
+                  mkdir -p $out
+                  echo "Compressing btrfs image with zstd..."
+                  zstd -3 -T0 ${config.system.build.btrfsImage}/baguette_rootfs.img -o $out/baguette_rootfs.img.zst
+                  echo "Compressed image created at $out/baguette_rootfs.img.zst"
+                '';
+          };
         };
-      };
 
       # These are the groups expected by default by `vmc start ...`
       users.groups = {
