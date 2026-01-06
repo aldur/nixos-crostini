@@ -90,22 +90,35 @@
         };
       };
 
-      # Add rw permissions to group and others for /dev/wl0
-      # https://chromium.googlesource.com/chromiumos/containers/cros-container-guest-tools/+/6d62810ff0231fbccbc1b0279e695842d88d6c5c/cros-wayland/10-cros-virtwl.rules
-      services.udev.extraRules = ''
-        KERNEL=="wl*", MODE="0666"
-      '';
+      services = {
+        # Add rw permissions to group and others for /dev/wl0
+        # https://chromium.googlesource.com/chromiumos/containers/cros-container-guest-tools/+/6d62810ff0231fbccbc1b0279e695842d88d6c5c/cros-wayland/10-cros-virtwl.rules
+        udev.extraRules = ''
+          KERNEL=="wl*", MODE="0666"
+        '';
+
+        # https://chromium.googlesource.com/chromiumos/platform2/+/HEAD/vm_tools/baguette_image/src/data/usr/local/lib/systemd/journald.conf.d/50-console.conf?autodive=0%2F%2F%2F
+        journald.extraConfig = ''
+          ForwardToConsole=yes
+        '';
+
+        # D-Bus service for cros-notificationd activation
+        # https://chromium.googlesource.com/chromiumos/containers/cros-container-guest-tools/+/refs/heads/main/cros-notificationd/org.freedesktop.Notifications.service
+        dbus.packages = [
+          (pkgs.writeTextDir "share/dbus-1/services/org.freedesktop.Notifications.service" ''
+            [D-BUS Service]
+            Name=org.freedesktop.Notifications
+            Exec=/bin/false
+            SystemdService=cros-notificationd.service
+          '')
+        ];
+      };
 
       # NOTE: maitred reports permissions errors for `/dev/kmsg`
       # but they happen on the standard Debian baguette image as well.
 
       # This is a hack to reproduce /etc/profile.d in NixOS
       environment.shellInit = lib.mkBefore baguette-env;
-
-      # https://chromium.googlesource.com/chromiumos/platform2/+/HEAD/vm_tools/baguette_image/src/data/usr/local/lib/systemd/journald.conf.d/50-console.conf?autodive=0%2F%2F%2F
-      services.journald.extraConfig = ''
-        ForwardToConsole=yes
-      '';
 
       system =
         let
@@ -309,6 +322,20 @@
               ExecStart = "/opt/google/cros-containers/bin/port_listener";
               Restart = "always";
             };
+          };
+
+        };
+
+        user.services.cros-notificationd = {
+          description = "Chromium OS Notification Server";
+          after = [ "opt-google-cros\\x2dcontainers.mount" ];
+
+          serviceConfig = {
+            Type = "dbus";
+            BusName = "org.freedesktop.Notifications";
+            ExecStart = "/opt/google/cros-containers/bin/notificationd --virtwl_device=/dev/wl0";
+            ExecStopPost = "/opt/google/cros-containers/bin/guest_service_failure_notifier cros-notificationd";
+            Restart = "always";
           };
         };
       };
