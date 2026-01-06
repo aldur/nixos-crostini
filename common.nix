@@ -50,13 +50,6 @@ in
     };
   };
 
-  # Disable nixos documentation because it is annoying to build.
-  documentation.nixos.enable = lib.mkForce false;
-
-  # Make sure documentation for NixOS programs are installed.
-  # This is disabled by lxc-container.nix in imports.
-  documentation.enable = lib.mkForce true;
-
   environment = {
     systemPackages = [
       cros-container-guest-tools
