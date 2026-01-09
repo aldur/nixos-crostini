@@ -79,6 +79,12 @@
         fsType = "btrfs";
       };
 
+      # Disable systemd-gpt-auto-generator which fails (graciously) in Baguette.
+      systemd.generators."systemd-gpt-auto-generator" = "/dev/null";
+
+      # Don't attempt to load kernel modules unavailable in Baguette.
+      boot.kernelModules = lib.mkForce [ ];
+
       networking = {
         hostName = lib.mkDefault "baguette-nixos";
         useHostResolvConf = true;
