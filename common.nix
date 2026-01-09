@@ -109,116 +109,122 @@ in
     "x-scheme-handler/unknown" = "garcon_host_browser.desktop";
   };
 
-  systemd.user = {
-    services = {
-      garcon = {
-        # TODO: In the original service definition this only starts _after_ sommelier.
-        description = "Chromium OS Garcon Bridge";
-        wantedBy = [ "default.target" ];
-        serviceConfig = {
-          ExecStart = "/opt/google/cros-containers/bin/garcon --server";
-          Type = "simple";
-          ExecStopPost = "/opt/google/cros-containers/bin/guest_service_failure_notifier cros-garcon";
-          Restart = "always";
+  systemd = {
+    user = {
+      services = {
+        garcon = {
+          # TODO: In the original service definition this only starts _after_ sommelier.
+          description = "Chromium OS Garcon Bridge";
+          wantedBy = [ "default.target" ];
+          serviceConfig = {
+            ExecStart = "/opt/google/cros-containers/bin/garcon --server";
+            Type = "simple";
+            ExecStopPost = "/opt/google/cros-containers/bin/guest_service_failure_notifier cros-garcon";
+            Restart = "always";
+          };
+          environment = {
+            BROWSER = lib.getExe' cros-container-guest-tools "garcon-url-handler";
+            NCURSES_NO_UTF8_ACS = "1";
+            QT_AUTO_SCREEN_SCALE_FACTOR = "1";
+            QT_QPA_PLATFORMTHEME = "gtk2";
+            XCURSOR_THEME = "Adwaita";
+            XDG_CONFIG_HOME = "%h/.config";
+            XDG_CURRENT_DESKTOP = "X-Generic";
+            XDG_SESSION_TYPE = "wayland";
+            # FIXME: These paths do not work under nixos
+            XDG_DATA_DIRS = "%h/.local/share:%h/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:/usr/local/share:/usr/share";
+            # PATH = "/usr/local/sbin:/usr/local/bin:/usr/local/games:/usr/sbin:/usr/bin:/usr/games:/sbin:/bin";
+          };
         };
-        environment = {
-          BROWSER = lib.getExe' cros-container-guest-tools "garcon-url-handler";
-          NCURSES_NO_UTF8_ACS = "1";
-          QT_AUTO_SCREEN_SCALE_FACTOR = "1";
-          QT_QPA_PLATFORMTHEME = "gtk2";
-          XCURSOR_THEME = "Adwaita";
-          XDG_CONFIG_HOME = "%h/.config";
-          XDG_CURRENT_DESKTOP = "X-Generic";
-          XDG_SESSION_TYPE = "wayland";
-          # FIXME: These paths do not work under nixos
-          XDG_DATA_DIRS = "%h/.local/share:%h/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:/usr/local/share:/usr/share";
-          # PATH = "/usr/local/sbin:/usr/local/bin:/usr/local/games:/usr/sbin:/usr/bin:/usr/games:/sbin:/bin";
+
+        "sommelier@" = {
+          description = "Parent sommelier listening on socket wayland-%i";
+          wantedBy = [ "default.target" ];
+          path = with pkgs; [
+            systemd # systemctl
+            bash # sh
+          ];
+          serviceConfig = {
+            Type = "notify";
+            ExecStart = ''
+              /opt/google/cros-containers/bin/sommelier \
+                            --parent \
+                            --sd-notify="READY=1" \
+                            --socket=wayland-%i \
+                            --stable-scaling \
+                            --enable-linux-dmabuf \
+                            sh -c \
+                                "systemctl --user set-environment ''${WAYLAND_DISPLAY_VAR}=$''${WAYLAND_DISPLAY}; \
+                                 systemctl --user import-environment SOMMELIER_VERSION"
+            '';
+            ExecStopPost = "/opt/google/cros-containers/bin/guest_service_failure_notifier sommelier";
+          };
+          environment = {
+            WAYLAND_DISPLAY_VAR = "WAYLAND_DISPLAY";
+            SOMMELIER_SCALE = "1.0";
+            # From `cros-sommelier-override`
+            SOMMELIER_ACCELERATORS = "Super_L,<Alt>bracketleft,<Alt>bracketright,<Alt>tab";
+          };
+        };
+
+        "sommelier-x@" = {
+          description = "Parent sommelier listening on socket wayland-%i";
+          wantedBy = [ "default.target" ];
+          path = with pkgs; [
+            systemd # systemctl
+            bash # sh
+            xorg.xauth
+            tinyxxd
+          ];
+          serviceConfig = {
+            Type = "notify";
+            ExecStart = ''
+              /opt/google/cros-containers/bin/sommelier \
+                -X \
+                --x-display=%i \
+                --sd-notify="READY=1" \
+                --no-exit-with-child \
+                --x-auth="''${HOME}/.Xauthority" \
+                --stable-scaling \
+                --enable-xshape \
+                --enable-linux-dmabuf \
+                sh -c \
+                    "systemctl --user set-environment ''${DISPLAY_VAR}=$''${DISPLAY}; \
+                     systemctl --user set-environment ''${XCURSOR_SIZE_VAR}=$''${XCURSOR_SIZE}; \
+                     systemctl --user import-environment SOMMELIER_VERSION; \
+                     touch ''${HOME}/.Xauthority; \
+                     xauth -f ''${HOME}/.Xauthority add :%i . $(xxd -l 16 -p /dev/urandom); \
+                     . /etc/sommelierrc"
+            '';
+            ExecStopPost = "/opt/google/cros-containers/bin/guest_service_failure_notifier sommelier-x";
+          };
+          environment = {
+            # TODO: Set `SOMMELIER_XFONT_PATH`
+            DISPLAY_VAR = "DISPLAY";
+            XCURSOR_SIZE_VAR = "XCURSOR_SIZE";
+            SOMMELIER_SCALE = "1.0";
+            # From `cros-sommelier-x-override`
+            SOMMELIER_FRAME_COLOR = "#F2F2F2";
+            SOMMELIER_ACCELERATORS = "Super_L,<Alt>bracketleft,<Alt>bracketright,<Alt>tab";
+          };
         };
       };
 
-      "sommelier@" = {
-        description = "Parent sommelier listening on socket wayland-%i";
-        wantedBy = [ "default.target" ];
-        path = with pkgs; [
-          systemd # systemctl
-          bash # sh
-        ];
-        serviceConfig = {
-          Type = "notify";
-          ExecStart = ''
-            /opt/google/cros-containers/bin/sommelier \
-                          --parent \
-                          --sd-notify="READY=1" \
-                          --socket=wayland-%i \
-                          --stable-scaling \
-                          --enable-linux-dmabuf \
-                          sh -c \
-                              "systemctl --user set-environment ''${WAYLAND_DISPLAY_VAR}=$''${WAYLAND_DISPLAY}; \
-                               systemctl --user import-environment SOMMELIER_VERSION"
-          '';
-          ExecStopPost = "/opt/google/cros-containers/bin/guest_service_failure_notifier sommelier";
-        };
-        environment = {
-          WAYLAND_DISPLAY_VAR = "WAYLAND_DISPLAY";
-          SOMMELIER_SCALE = "1.0";
-          # From `cros-sommelier-override`
-          SOMMELIER_ACCELERATORS = "Super_L,<Alt>bracketleft,<Alt>bracketright,<Alt>tab";
-        };
-      };
+      targets.default.wants = [
+        "sommelier@0.service"
+        "sommelier@1.service"
+        "sommelier-x@0.service"
+        "sommelier-x@1.service"
+      ];
 
-      "sommelier-x@" = {
-        description = "Parent sommelier listening on socket wayland-%i";
-        wantedBy = [ "default.target" ];
-        path = with pkgs; [
-          systemd # systemctl
-          bash # sh
-          xorg.xauth
-          tinyxxd
-        ];
-        serviceConfig = {
-          Type = "notify";
-          ExecStart = ''
-            /opt/google/cros-containers/bin/sommelier \
-              -X \
-              --x-display=%i \
-              --sd-notify="READY=1" \
-              --no-exit-with-child \
-              --x-auth="''${HOME}/.Xauthority" \
-              --stable-scaling \
-              --enable-xshape \
-              --enable-linux-dmabuf \
-              sh -c \
-                  "systemctl --user set-environment ''${DISPLAY_VAR}=$''${DISPLAY}; \
-                   systemctl --user set-environment ''${XCURSOR_SIZE_VAR}=$''${XCURSOR_SIZE}; \
-                   systemctl --user import-environment SOMMELIER_VERSION; \
-                   touch ''${HOME}/.Xauthority; \
-                   xauth -f ''${HOME}/.Xauthority add :%i . $(xxd -l 16 -p /dev/urandom); \
-                   . /etc/sommelierrc"
-          '';
-          ExecStopPost = "/opt/google/cros-containers/bin/guest_service_failure_notifier sommelier-x";
-        };
-        environment = {
-          # TODO: Set `SOMMELIER_XFONT_PATH`
-          DISPLAY_VAR = "DISPLAY";
-          XCURSOR_SIZE_VAR = "XCURSOR_SIZE";
-          SOMMELIER_SCALE = "1.0";
-          # From `cros-sommelier-x-override`
-          SOMMELIER_FRAME_COLOR = "#F2F2F2";
-          SOMMELIER_ACCELERATORS = "Super_L,<Alt>bracketleft,<Alt>bracketright,<Alt>tab";
-        };
-      };
+      services."sommelier@1".environment = low-density-overrides-env;
+      services."sommelier@1".overrideStrategy = "asDropin";
+      services."sommelier-x@1".environment = low-density-overrides-env;
+      services."sommelier-x@1".overrideStrategy = "asDropin";
     };
 
-    targets.default.wants = [
-      "sommelier@0.service"
-      "sommelier@1.service"
-      "sommelier-x@0.service"
-      "sommelier-x@1.service"
-    ];
-
-    services."sommelier@1".environment = low-density-overrides-env;
-    services."sommelier@1".overrideStrategy = "asDropin";
-    services."sommelier-x@1".environment = low-density-overrides-env;
-    services."sommelier-x@1".overrideStrategy = "asDropin";
+    # Suppress a few un-needed daemons
+    services."console-getty".enable = false;
+    services."getty@".enable = false;
   };
 }
