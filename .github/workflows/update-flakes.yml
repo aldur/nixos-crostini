@@ -17,7 +17,9 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd #v6.0.2
 
       - name: setup nix
-        uses: ./.github/actions/nix-setup
+        uses: cachix/install-nix-action@4e002c8ec80594ecd40e759629461e26c8abed15 #v24
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
 
       - name: update nix flake inputs
         run: |
@@ -25,7 +27,7 @@ jobs:
           git status
 
       - name: run tests with nix
-        uses: ./.github/actions/nix-test
+        run: nix build
 
       # requires allowing PRs from github actions: https://github.com/peter-evans/create-pull-request?tab=readme-ov-file#workflow-permissions
       - name: create pull request
