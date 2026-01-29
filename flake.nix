@@ -50,7 +50,7 @@
 
       crostiniSystem =
         {
-          targetSystem ? builtins.currentSystem,
+          targetSystem,
         }:
         nixosSystemFor {
           inherit targetSystem;
@@ -99,8 +99,9 @@
 
       nixosConfigurations = {
         # This allows you to re-build the image from inside the container/VM.
-        lxc-nixos = crostiniSystem { };
-        baguette-nixos = baguetteSystem { };
+        # Defaults to `aarch64-linux`.
+        lxc-nixos = self.nixosConfigurations.lxc-nixos-arm64l;
+        baguette-nixos = self.nixosConfigurations.baguette-nixos-arm64l;
 
         # Explicitly build for `aarch64-linux`
         lxc-nixos-arm64l = crostiniSystem { targetSystem = arml; };
