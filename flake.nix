@@ -107,7 +107,7 @@
         lxc-nixos-arm64l = crostiniSystem { targetSystem = arml; };
         baguette-nixos-arm64l = baguetteSystem { targetSystem = arml; };
 
-        # Explicitly build for `x87_64-linux`
+        # Explicitly build for `x86_64-linux`
         lxc-nixos-x86l = crostiniSystem { targetSystem = x86l; };
         baguette-nixos-x86l = baguetteSystem { targetSystem = x86l; };
       };
