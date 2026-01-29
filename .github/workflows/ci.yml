@@ -14,7 +14,14 @@ permissions:
 
 jobs:
   nixos-ci:
-    runs-on: ubuntu-24.04-arm
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+          - runner: ubuntu-24.04
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 #v6.0.1
         with:
