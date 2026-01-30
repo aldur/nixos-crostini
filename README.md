@@ -1,7 +1,7 @@
 # `nixos-crostini`: NixOS in ChromeOS
 
 This repository provides configuration and modules to build NixOS
-[containers](#lxc-containers)/[images](#baguette-images) for Crostini (Linux on
+[images](#baguette-images)/[containers](#lxc-containers) for Crostini (Linux on
 ChromeOS). The resulting guest supports:
 
 - clipboard sharing,
@@ -17,19 +17,19 @@ for Baguette support.
 ## Quick start
 
 1. [Install Nix][1].
+1. Enable flake support:
+   `export NIX_CONFIG="experimental-features = nix-command flakes"`.
 1. Run `nix flake init -t github:aldur/nixos-crostini` from a new directory (or
    simply clone this repository).
 1. Edit [`./configuration.nix`](./configuration.nix) with your username;
    later on, pick the same when configuring Linux on ChromeOS.
 
-Now build a [container image](#lxc-quick-start) or a [VM
-image](#baguette-quick-start).
+ Now build a [VM image](#baguette-quick-start) or [container image](#lxc-quick-start).
 
 ## Baguette images
 
-ChromeOS >= 143 supports _containerless_ Crostini (aka [Baguette][3]). This
-repository can build Baguette images that provide clipboard sharing, URIs
-handling, X/Wayland forwarding, ports and notification forwarding, etc.
+ChromeOS >= 143 supports _containerless_ Crostini (aka [Baguette][3]),
+providing more flexibility than legacy LXC containers.
 
 ### Baguette: Quick start
 
