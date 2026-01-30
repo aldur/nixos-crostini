@@ -24,7 +24,7 @@ for Baguette support.
 1. Edit [`./configuration.nix`](./configuration.nix) with your username;
    later on, pick the same when configuring Linux on ChromeOS.
 
- Now build a [VM image](#baguette-quick-start) or [container image](#lxc-quick-start).
+Now build a [VM image](#baguette-quick-start) or [container image](#lxc-quick-start).
 
 ## Baguette images
 
@@ -33,18 +33,19 @@ providing more flexibility than legacy LXC containers.
 
 ### Baguette: Quick start
 
+> [!TIP]
+> This [CI pipeline][4] builds Baguette images for both ARM64 and x86_64 and
+  uploads them as GitHub workflow artifacts, that you can download to avoid
+  building the image yourself. If you fork this repository and commit a change
+  to `./configuration.nix` with your username, the CI will build a Baguette
+  NixOS image with your changes.
+
 ```bash
 # Build the image
 $ nix build .#baguette-zimage
 $ ls result
 baguette_rootfs.img.zst
 ```
-
-> [!TIP]
-> This [CI pipeline][4] builds Baguette images for both ARM and x64 and uploads
-  them as GitHub workflow artifacts. If you fork this repository and commit a
-  change to `./configuration.nix` with your username, the CI will build a
-  Baguette NixOS image with your changes.
 
 Copy `baguette_rootfs.img.zst` to the Chromebook "Downloads" directory. Open
 `crosh` (<kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>t</kbd>), configure the VM,
