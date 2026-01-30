@@ -8,7 +8,8 @@ ChromeOS). The resulting guest supports:
 - handling of URIs, URLs, etc,
 - file sharing,
 - X/Wayland forwarding, so that the guest can run GUI applications,
-- port forwarding from guest to host.
+- port forwarding from guest to host,
+- notification forwarding from guest to ChromeOS.
 
 See [this blog post][0] for more details about LXC support and [this one][5]
 for Baguette support.
@@ -24,11 +25,61 @@ for Baguette support.
 Now build a [container image](#lxc-quick-start) or a [VM
 image](#baguette-quick-start).
 
+## Baguette images
+
+ChromeOS >= 143 supports _containerless_ Crostini (aka [Baguette][3]). This
+repository can build Baguette images that provide clipboard sharing, URIs
+handling, X/Wayland forwarding, ports and notification forwarding, etc.
+
+### Baguette: Quick start
+
+```bash
+# Build the image
+$ nix build .#baguette-zimage
+$ ls result
+baguette_rootfs.img.zst
+```
+
+> [!TIP]
+> This [CI pipeline][4] builds Baguette images for both ARM and x64 and uploads
+  them as GitHub workflow artifacts. If you fork this repository and commit a
+  change to `./configuration.nix` with your username, the CI will build a
+  Baguette NixOS image with your changes.
+
+Copy `baguette_rootfs.img.zst` to the Chromebook "Downloads" directory. Open
+`crosh` (<kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>t</kbd>), configure the VM,
+and launch the image:
+
+```bash
+vmc create --vm-type BAGUETTE \
+  --size 15G \
+  --source /home/chronos/user/MyFiles/Downloads/baguette_rootfs.img.zst \
+  baguette
+
+vmc start --vm-type BAGUETTE baguette
+
+[aldur@baguette-nixos:~]$
+```
+
+Open new shell sessions with `vsh baguette penguin`.
+
+This [blog post][5] shows further ways to configure, run, and customize a
+Baguette NixOS image.
+
+### Baguette: NixOS module
+
+This flake's `nixosModules.baguette` module allows building the image through
+the output
+`nixosConfigurations.baguette-nixos.config.system.build.btrfsImageCompressed`.
+
+To adjust the size of the resulting disk image, set
+`virtualisation.diskImageSize` (in MiB). You will need enough space to fit your
+NixOS configuration.
+
 ## LXC containers
 
-Crostini runs [LXC containers in a VM called `termina`][6]. This repository
-provides a Flake output and an NixOS module to build a custom LXC container
-from your configuration.
+This repository can also build legacy LXC containers for Crostini to run [in
+the `termina` VM][6].
 
 ### LXC: Quick start
 
@@ -77,59 +128,6 @@ Here is a _very minimal_ example:
   };
 }
 ```
-
-## Baguette images
-
-ChromeOS >= 141 provides experimental support for _containerless_ Crostini (aka
-[Baguette][3]). This repository can build Baguette images that provide the same
-features of LXC containers (clipboard sharing, URIs handling, X/Wayland
-forwarding, etc) but allow more flexibility/freedom (e.g., to run Kubernetes
-without KVM).
-
-### Baguette: Quick start
-
-```bash
-# Build the image
-$ nix build .#baguette-zimage
-$ ls result
-baguette_rootfs.img.zst
-```
-
-> [!TIP]
-> This [CI pipeline][4] builds Baguette images and uploads them as GitHub
-  workflow artifacts. If you fork this repository and commit a change to
-  `./configuration.nix` with your username, the CI will build a Baguette NixOS
-  image with your changes.
-
-Copy `baguette_rootfs.img.zst` to the Chromebook "Downloads" directory. Open
-`crosh` (<kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>t</kbd>), configure the VM,
-and launch the image:
-
-```bash
-vmc create --vm-type BAGUETTE \
-  --size 15G \
-  --source /home/chronos/user/MyFiles/Downloads/baguette_rootfs.img.zst \
-  baguette
-
-vmc start --vm-type BAGUETTE baguette
-
-[aldur@baguette-nixos:~]$
-```
-
-Open new shell sessions with `vsh baguette penguin`.
-
-This [blog post][5] shows further ways to configure, run, and customize a
-Baguette NixOS image.
-
-### Baguette: NixOS module
-
-This flake's `nixosModules.baguette` module allows building the image through
-the output
-`nixosConfigurations.baguette-nixos.config.system.build.btrfsImageCompressed`.
-
-To adjust the size of the resulting disk image, set
-`virtualisation.diskImageSize` (in MiB). You will need enough space to fit your
-NixOS configuration.
 
 [0]: https://aldur.blog/nixos-crostini
 [1]: https://nixos.org/download/
