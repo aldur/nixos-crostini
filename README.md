@@ -68,11 +68,44 @@ Baguette NixOS image.
 
 ### Baguette: NixOS module
 
-This flake's `nixosModules.baguette` module allows building the image through
-the output
-`nixosConfigurations.baguette-nixos.config.system.build.btrfsImageCompressed`.
+To add `baguette` support to your NixOS existing configuration:
 
-To adjust the size of the resulting disk image, set
+1. Add this flake as an input.
+1. Add `inputs.nixos-crostini.nixosModules.baguette` to your modules.
+
+Here is a _very minimal_ example:
+
+```nix
+{
+  # Here is the input.
+  inputs.nixos-crostini.url = "github:aldur/nixos-crostini";
+
+  # Optional:
+  inputs.nixos-crostini.inputs.nixpkgs.follows = "nixpkgs";
+
+  outputs = { self, nixpkgs, nixos-crostini }: {
+    # This allows you to rebuild while running inside Baguette.
+    # Change to your hostname.
+    nixosConfigurations.yourhostname = nixpkgs.lib.nixosSystem {
+      modules = [
+        # This is your configuration.
+        ./configuration.nix
+
+        # This is where you add the `baguette` module
+        nixos-crostini.nixosModules.baguette
+      ];
+    };
+
+    # Change <system> to  "x86_64-linux", "aarch64-linux"
+    # This will allow you to build the image from another host.
+    packages."<system>".baguette-zimage = self.nixosConfigurations.hostname.config.system.build.btrfsImageCompressed;
+
+  };
+}
+```
+
+To build an image from another host, you can build `.#baguette-zimage`. If you
+need to adjust the size of the resulting disk image, set
 `virtualisation.diskImageSize` (in MiB). You will need enough space to fit your
 NixOS configuration.
 
@@ -95,8 +128,8 @@ image on the Chromebook.
 
 ### LXC: NixOS module
 
-You can also integrate the `crostini.nix` module in your Nix configuration. If
-you are using flakes:
+You can also integrate the `nixosModules.crostini` module in your Nix
+configuration. If you are using flakes:
 
 1. Add this flake as an input.
 1. Add `inputs.nixos-crostini.nixosModules.crostini` to your modules.
@@ -112,9 +145,11 @@ Here is a _very minimal_ example:
   inputs.nixos-crostini.inputs.nixpkgs.follows = "nixpkgs";
 
   outputs = { self, nixpkgs, nixos-crostini }: {
+    # This allows you to rebuild while running inside the LXC container.
     # Change to your hostname.
     nixosConfigurations.yourhostname = nixpkgs.lib.nixosSystem {
       modules = [
+        # This is your configuration.
         ./configuration.nix
 
         # Here is where it gets added to the modules.
@@ -123,7 +158,7 @@ Here is a _very minimal_ example:
     };
 
     # Change <system> to  "x86_64-linux", "aarch64-linux"
-    # This will allow you to build the image.
+    # This will allow you to build the image from another host.
     packages."<system>".lxc-image-and-metadata = nixos-crostini.packages."<system>".default;
   };
 }
