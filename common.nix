@@ -78,7 +78,7 @@ in
     };
 
     # Load the environment populated from `sommelier`, e.g. `DISPLAY`.
-    shellInit = builtins.readFile "${cros-container-guest-tools-src}/cros-sommelier/sommelier.sh";
+    shellInit = builtins.readFile ./sommelier.sh;
   };
 
   system.activationScripts = {
