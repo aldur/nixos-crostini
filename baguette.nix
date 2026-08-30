@@ -7,20 +7,18 @@
     ...
   }:
   let
-    baguette-env = builtins.readFile (
-      pkgs.stdenv.mkDerivation {
-        name = "10-baguette-envs.sh";
-        src = pkgs.fetchurl {
-          url = "https://chromium.googlesource.com/chromiumos/platform2/+/051c972a75c15d38c7bab7ac017c7550ca6c24f5/vm_tools/baguette_image/src/data/etc/profile.d/10-baguette-envs.sh?format=TEXT";
-          hash = "sha256-/poJYX0S7/ni8OJEI3PfBmUtWy8x5WzSnT3MMOEiuoI=";
-        };
-        dontBuild = true;
-        dontUnpack = true;
-        installPhase = ''
-          cat $src | base64 -d | tee $out
-        '';
-      }
-    );
+    baguette-env = pkgs.stdenv.mkDerivation {
+      name = "10-baguette-envs.sh";
+      src = pkgs.fetchurl {
+        url = "https://chromium.googlesource.com/chromiumos/platform2/+/051c972a75c15d38c7bab7ac017c7550ca6c24f5/vm_tools/baguette_image/src/data/etc/profile.d/10-baguette-envs.sh?format=TEXT";
+        hash = "sha256-/poJYX0S7/ni8OJEI3PfBmUtWy8x5WzSnT3MMOEiuoI=";
+      };
+      dontBuild = true;
+      dontUnpack = true;
+      installPhase = ''
+        cat $src | base64 -d | tee $out
+      '';
+    };
   in
   {
     imports = [
@@ -124,7 +122,7 @@
       # but they happen on the standard Debian baguette image as well.
 
       # This is a hack to reproduce /etc/profile.d in NixOS
-      environment.shellInit = lib.mkBefore baguette-env;
+      environment.shellInit = lib.mkBefore ". ${baguette-env}";
 
       system =
         let
