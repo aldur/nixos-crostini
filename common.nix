@@ -82,7 +82,7 @@ in
   };
 
   system.activationScripts = {
-    # Activating sommelier-x will rely the bind-mount Xwailand executable. As
+    # Activating sommelier-x relies on the bind-mounted Xwayland executable. As
     # far as I could debug, this path can't be controlled through env and would
     # require re-compiling Xwayland (which is also dynamically loaded by the
     # sommelier executable).

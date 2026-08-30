@@ -63,7 +63,7 @@
           # nixos-rebuild also requires a "system" profile
           ${config.nix.package.out}/bin/nix-env -p /nix/var/nix/profiles/system --set /run/current-system
 
-          # rely on host for DNS reolution
+          # rely on host for DNS resolution
           ln -sf /run/resolv.conf /etc/resolv.conf
         '';
 
@@ -141,7 +141,7 @@
                 mkdir -p /usr/sbin/
                 ln -sf ${pkgs.shadow}/bin/usermod /usr/sbin/usermod
               ''
-            # Resize the avaialble space to the one provided by Baguette
+            # Resize the available space to the one provided by Baguette
             + ''
               ${pkgs.btrfs-progs}/bin/btrfs filesystem resize max /
             ''
