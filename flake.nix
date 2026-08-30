@@ -31,7 +31,7 @@
       nixosSystemFor =
         {
           additionalModules,
-          targetSystem ? builtins.currentSystem,
+          targetSystem,
         }:
         nixpkgs.lib.nixosSystem {
           inherit specialArgs;
@@ -41,7 +41,7 @@
 
       baguetteSystem =
         {
-          targetSystem ? builtins.currentSystem,
+          targetSystem,
         }:
         nixosSystemFor {
           inherit targetSystem;
