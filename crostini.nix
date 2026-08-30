@@ -13,9 +13,5 @@
   # We don't want to use the host's nix-daemon.
   environment.variables.NIX_REMOTE = lib.mkForce "";
 
-  # Suppress daemons which will vomit to the log about their unhappiness
-  systemd.services."console-getty".enable = false;
-  systemd.services."getty@".enable = false;
-
   networking.hostName = lib.mkDefault "lxc-nixos";
 }
