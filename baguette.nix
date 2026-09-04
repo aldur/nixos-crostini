@@ -137,6 +137,7 @@
           activationScripts = {
 
             baguette = ''
+              mkdir -p /usr/share/
               ln -sf /etc/zoneinfo /usr/share/
             ''
             +
