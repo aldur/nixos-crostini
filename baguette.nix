@@ -83,6 +83,11 @@
       # Don't attempt to load kernel modules unavailable in Baguette.
       boot.kernelModules = lib.mkForce [ ];
 
+      # Baguette boots the ChromeOS kernel. The kernel, its modules, and the
+      # initrd of the configuration never run, and take 200 MiB in the image.
+      boot.kernel.enable = lib.mkDefault false;
+      boot.initrd.enable = lib.mkDefault false;
+
       networking = {
         hostName = lib.mkDefault "baguette-nixos";
         useHostResolvConf = true;
