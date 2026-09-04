@@ -330,6 +330,9 @@
               Type = "simple";
               ExecStart = "/opt/google/cros-containers/bin/port_listener";
               Restart = "always";
+              # Without a delay, a missing binary restarts in a tight loop
+              # and floods the console until the start limit.
+              RestartSec = 1;
             };
           };
 
@@ -345,6 +348,7 @@
             ExecStart = "/opt/google/cros-containers/bin/notificationd --virtwl_device=/dev/wl0";
             ExecStopPost = "/opt/google/cros-containers/bin/guest_service_failure_notifier cros-notificationd";
             Restart = "always";
+            RestartSec = 1;
           };
         };
       };
