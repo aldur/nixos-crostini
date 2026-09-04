@@ -127,7 +127,11 @@
       system =
         let
           # https://github.com/jmbaur/nixpkgs/blob/115c1d69015de09f4211890477af05ba4fb873b9/nixos/modules/virtualisation/lxc-container.nix#L18-L19
-          initScript = if config.boot.initrd.systemd.enable then "prepare-root" else "init";
+          # The same condition as nixos/modules/system/activation/top-level.nix:
+          # with a systemd initrd, `init` is systemd and `prepare-root` the
+          # stage-2 script. Without an initrd, `init` is the stage-2 script.
+          initScript =
+            if config.boot.initrd.enable && config.boot.initrd.systemd.enable then "prepare-root" else "init";
         in
         {
           activationScripts = {
@@ -145,7 +149,7 @@
             + ''
               ${pkgs.btrfs-progs}/bin/btrfs filesystem resize max /
             ''
-            # Re-link the initScript (in case of toggling `boot.initrd.systemd.enable`)
+            # Re-link the initScript (in case of toggling `boot.initrd.systemd.enable` or `boot.initrd.enable`)
             + ''
               ln -sf "$systemConfig/${initScript}" /sbin/init
             '';
