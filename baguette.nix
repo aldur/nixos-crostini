@@ -107,9 +107,7 @@
         '';
 
         # https://chromium.googlesource.com/chromiumos/platform2/+/HEAD/vm_tools/baguette_image/src/data/usr/local/lib/systemd/journald.conf.d/50-console.conf?autodive=0%2F%2F%2F
-        journald.extraConfig = ''
-          ForwardToConsole=yes
-        '';
+        journald.settings.Journal.ForwardToConsole = true;
 
         # D-Bus service for cros-notificationd activation
         # https://chromium.googlesource.com/chromiumos/containers/cros-container-guest-tools/+/refs/heads/main/cros-notificationd/org.freedesktop.Notifications.service
