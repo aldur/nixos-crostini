@@ -1,4 +1,5 @@
 {
+  config,
   lib,
   pkgs,
   ...
@@ -27,6 +28,14 @@ let
     '';
   };
 
+  # Expose the CrosAdapta theme to GTK 3 through XDG_DATA_DIRS.
+  # GTK 2 instead uses Adwaita, because nixpkgs has dropped support for the
+  # rendering engine required by CrosAdapt.
+  cros-ui-config = pkgs.runCommand "cros-ui-config" { } ''
+    mkdir -p $out/share/themes
+    ln -s /opt/google/cros-containers/cros-adapta $out/share/themes/CrosAdapta
+  '';
+
   low-density-overrides = {
     environment = {
       DISPLAY_VAR = "DISPLAY_LOW_DENSITY";
@@ -43,190 +52,252 @@ let
 
 in
 {
-  networking = {
-    # The eth0 interface in this container/VM can only be accessed from the host.
-    firewall.enable = false;
-
-    # Disabling IPv6 makes the boot a bit faster (DHCPD)
-    enableIPv6 = false;
-    dhcpcd = {
-      IPv6rs = false;
-      wait = "background";
-      extraConfig = "noarp";
-    };
-  };
-
-  environment = {
-    systemPackages = [
-      cros-container-guest-tools
-
-      pkgs.wl-clipboard # wl-copy / wl-paste
-      pkgs.xdg-utils # xdg-open
-      pkgs.usbutils # lsusb
-    ];
-
-    etc = {
-      # Required because `tremplin` will look for it.
-      # Without it, `vmc start termina <container>` will fail.
-      "gshadow" = {
-        mode = "0640";
-        text = "";
-        group = "shadow";
+  options = {
+    crostini = {
+      sommelier.stableScaling = lib.mkEnableOption "`--stable-scaling` for the X11 sommelier" // {
+        description = ''
+          Pass `--stable-scaling` to the X11 sommelier, as the ChromeOS
+          overrides do. With it, a GTK 2 window and sommelier round the size
+          of the window up in turn. This could result in a bug where a window
+          keeps getting wider.
+        '';
       };
 
-      # TODO: Even empty, this will stop `sommelier` from erroring out.
-      "sommelierrc" = {
-        mode = "0644";
-        text = ''
-          exit 0
+      ui.enable = lib.mkEnableOption "the UI integration of ChromeOS" // {
+        default = true;
+        description = ''
+          The host-mounted CrosAdapta theme for GTK 3, Adwaita from nixpkgs
+          for GTK 2, and the Adwaita icons and cursors used by garcon and
+          the themes. ChromeOS mounts CrosAdapta at
+          `/opt/google/cros-containers/cros-adapta`.
+        '';
+      };
+
+      ui.adwaita = lib.mkOption {
+        type = lib.types.package;
+        default = pkgs.adwaita-icon-theme;
+        defaultText = lib.literalExpression "pkgs.adwaita-icon-theme";
+        description = ''
+          The package with the Adwaita theme under `share/icons/Adwaita`. 
         '';
       };
     };
-
-    # Load the environment populated from `sommelier`, e.g. `DISPLAY`.
-    shellInit = ". ${cros-container-guest-tools-src}/cros-sommelier/sommelier.sh";
   };
 
-  system.activationScripts = {
-    # Activating sommelier-x relies on the bind-mounted Xwayland executable. As
-    # far as I could debug, this path can't be controlled through env and would
-    # require re-compiling Xwayland (which is also dynamically loaded by the
-    # sommelier executable).
-    #
-    # Same for the `sftp-server` launched by `garcon`.
-    #
-    # These are ugly HACKs, but they work
-    xkb = ''
-      mkdir -p /usr/share/
-      ln -sf ${pkgs.xkeyboard_config}/share/X11/ /usr/share/
-    '';
-    sftp-server = ''
-      mkdir -p /usr/lib/openssh/
-      ln -sf ${pkgs.openssh}/libexec/sftp-server /usr/lib/openssh/sftp-server
-    '';
-  };
+  config = {
+    networking = {
+      # The eth0 interface in this container/VM can only be accessed from the host.
+      firewall.enable = false;
 
-  # Taken from https://aur.archlinux.org/packages/cros-container-guest-tools-git
-  xdg.mime.defaultApplications = {
-    "text/html" = "garcon_host_browser.desktop";
-    "x-scheme-handler/http" = "garcon_host_browser.desktop";
-    "x-scheme-handler/https" = "garcon_host_browser.desktop";
-    "x-scheme-handler/about" = "garcon_host_browser.desktop";
-    "x-scheme-handler/unknown" = "garcon_host_browser.desktop";
-  };
+      # Disabling IPv6 makes the boot a bit faster (DHCPD)
+      enableIPv6 = false;
+      dhcpcd = {
+        IPv6rs = false;
+        wait = "background";
+        extraConfig = "noarp";
+      };
+    };
 
-  systemd = {
-    user = {
-      services = {
-        garcon = {
-          # TODO: In the original service definition this only starts _after_ sommelier.
-          description = "Chromium OS Garcon Bridge";
-          wantedBy = [ "default.target" ];
-          serviceConfig = {
-            ExecStart = "/opt/google/cros-containers/bin/garcon --server";
-            Type = "simple";
-            ExecStopPost = "/opt/google/cros-containers/bin/guest_service_failure_notifier cros-garcon";
-            Restart = "always";
-          };
-          environment = {
-            BROWSER = lib.getExe' cros-container-guest-tools "garcon-url-handler";
-            NCURSES_NO_UTF8_ACS = "1";
-            QT_AUTO_SCREEN_SCALE_FACTOR = "1";
-            QT_QPA_PLATFORMTHEME = "gtk2";
-            XCURSOR_THEME = "Adwaita";
-            XDG_CONFIG_HOME = "%h/.config";
-            XDG_CURRENT_DESKTOP = "X-Generic";
-            XDG_SESSION_TYPE = "wayland";
-            # FIXME: These paths do not work under nixos
-            XDG_DATA_DIRS = "%h/.local/share:%h/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:/usr/local/share:/usr/share";
-            # PATH = "/usr/local/sbin:/usr/local/bin:/usr/local/games:/usr/sbin:/usr/bin:/usr/games:/sbin:/bin";
-          };
+    environment = {
+      systemPackages = [
+        cros-container-guest-tools
+
+        pkgs.wl-clipboard # wl-copy / wl-paste
+        pkgs.xdg-utils # xdg-open
+        pkgs.usbutils # lsusb
+      ]
+      ++ lib.optionals config.crostini.ui.enable [
+        cros-ui-config
+        config.crostini.ui.adwaita
+        (pkgs.gnome-themes-extra.override {
+          adwaita-icon-theme = config.crostini.ui.adwaita;
+        })
+      ];
+
+      sessionVariables = lib.mkIf config.crostini.ui.enable {
+        GTK2_RC_FILES = "/etc/gtk-2.0/gtkrc";
+        GTK_DATA_PREFIX = "/run/current-system/sw";
+        XCURSOR_THEME = "Adwaita";
+      };
+
+      etc = {
+        # Required because `tremplin` will look for it.
+        # Without it, `vmc start termina <container>` will fail.
+        "gshadow" = {
+          mode = "0640";
+          text = "";
+          group = "shadow";
         };
 
-        "sommelier@" = {
-          description = "Parent sommelier listening on socket wayland-%i";
-          path = with pkgs; [
-            systemd # systemctl
-            bash # sh
-          ];
-          serviceConfig = {
-            Type = "notify";
-            ExecStart = ''
-              /opt/google/cros-containers/bin/sommelier \
-                            --parent \
-                            --sd-notify="READY=1" \
-                            --socket=wayland-%i \
-                            --stable-scaling \
-                            --enable-linux-dmabuf \
-                            sh -c \
-                                "systemctl --user set-environment ''${WAYLAND_DISPLAY_VAR}=$''${WAYLAND_DISPLAY}; \
-                                 systemctl --user import-environment SOMMELIER_VERSION"
-            '';
-            ExecStopPost = "/opt/google/cros-containers/bin/guest_service_failure_notifier sommelier";
-          };
-          environment = {
-            WAYLAND_DISPLAY_VAR = "WAYLAND_DISPLAY";
-            SOMMELIER_SCALE = "1.0";
-            # From `cros-sommelier-override`
-            SOMMELIER_ACCELERATORS = "Super_L,<Alt>bracketleft,<Alt>bracketright,<Alt>tab";
-          };
+        # TODO: Even empty, this will stop `sommelier` from erroring out.
+        "sommelierrc" = {
+          mode = "0644";
+          text = ''
+            exit 0
+          '';
         };
 
-        "sommelier-x@" = {
-          description = "Parent sommelier listening on socket wayland-%i";
-          path = with pkgs; [
-            systemd # systemctl
-            bash # sh
-            xauth
-            tinyxxd
-          ];
-          serviceConfig = {
-            Type = "notify";
-            ExecStart = ''
-              /opt/google/cros-containers/bin/sommelier \
-                -X \
-                --x-display=%i \
-                --sd-notify="READY=1" \
-                --no-exit-with-child \
-                --x-auth="''${HOME}/.Xauthority" \
-                --stable-scaling \
-                --enable-xshape \
-                --enable-linux-dmabuf \
-                sh -c \
-                    "systemctl --user set-environment ''${DISPLAY_VAR}=$''${DISPLAY}; \
-                     systemctl --user set-environment ''${XCURSOR_SIZE_VAR}=$''${XCURSOR_SIZE}; \
-                     systemctl --user import-environment SOMMELIER_VERSION; \
-                     touch ''${HOME}/.Xauthority; \
-                     xauth -f ''${HOME}/.Xauthority add $''${DISPLAY} . $(xxd -l 16 -p /dev/urandom); \
-                     . /etc/sommelierrc"
-            '';
-            ExecStopPost = "/opt/google/cros-containers/bin/guest_service_failure_notifier sommelier-x";
-          };
-          environment = {
-            # TODO: Set `SOMMELIER_XFONT_PATH`
-            DISPLAY_VAR = "DISPLAY";
-            XCURSOR_SIZE_VAR = "XCURSOR_SIZE";
-            SOMMELIER_SCALE = "1.0";
-            # From `cros-sommelier-x-override`
-            SOMMELIER_FRAME_COLOR = "#F2F2F2";
-            SOMMELIER_ACCELERATORS = "Super_L,<Alt>bracketleft,<Alt>bracketright,<Alt>tab";
-          };
+        # Use nixpkgs' GTK 2 theme and engine; keep CrosAdapta for GTK 3.
+        "gtk-2.0/gtkrc" = lib.mkIf config.crostini.ui.enable {
+          text = ''
+            gtk-icon-theme-name = "Adwaita"
+            gtk-theme-name = "Adwaita"
+          '';
+        };
+        "xdg/gtk-3.0/settings.ini" = lib.mkIf config.crostini.ui.enable {
+          text = ''
+            [Settings]
+            gtk-icon-theme-name = Adwaita
+            gtk-theme-name = CrosAdapta
+          '';
         };
       };
 
-      targets.default.wants = [
-        "sommelier@0.service"
-        "sommelier@1.service"
-        "sommelier-x@0.service"
-        "sommelier-x@1.service"
-      ];
-
-      services."sommelier@1" = low-density-overrides;
-      services."sommelier-x@1" = low-density-overrides;
+      # Load the environment populated from `sommelier`, e.g. `DISPLAY`.
+      shellInit = ". ${cros-container-guest-tools-src}/cros-sommelier/sommelier.sh";
     };
 
-    # Suppress a few un-needed daemons
-    services."console-getty".enable = false;
-    services."getty@".enable = false;
+    system.activationScripts = {
+      # Activating sommelier-x relies on the bind-mounted Xwayland executable. As
+      # far as I could debug, this path can't be controlled through env and would
+      # require re-compiling Xwayland (which is also dynamically loaded by the
+      # sommelier executable).
+      #
+      # Same for the `sftp-server` launched by `garcon`.
+      #
+      # These are ugly HACKs, but they work
+      xkb = ''
+        mkdir -p /usr/share/
+        ln -sf ${pkgs.xkeyboard_config}/share/X11/ /usr/share/
+      '';
+      sftp-server = ''
+        mkdir -p /usr/lib/openssh/
+        ln -sf ${pkgs.openssh}/libexec/sftp-server /usr/lib/openssh/sftp-server
+      '';
+    };
+
+    # Taken from https://aur.archlinux.org/packages/cros-container-guest-tools-git
+    xdg.mime.defaultApplications = {
+      "text/html" = "garcon_host_browser.desktop";
+      "x-scheme-handler/http" = "garcon_host_browser.desktop";
+      "x-scheme-handler/https" = "garcon_host_browser.desktop";
+      "x-scheme-handler/about" = "garcon_host_browser.desktop";
+      "x-scheme-handler/unknown" = "garcon_host_browser.desktop";
+    };
+
+    systemd = {
+      user = {
+        services = {
+          garcon = {
+            # TODO: In the original service definition this only starts _after_ sommelier.
+            description = "Chromium OS Garcon Bridge";
+            wantedBy = [ "default.target" ];
+            serviceConfig = {
+              ExecStart = "/opt/google/cros-containers/bin/garcon --server";
+              Type = "simple";
+              ExecStopPost = "/opt/google/cros-containers/bin/guest_service_failure_notifier cros-garcon";
+              Restart = "always";
+            };
+            environment = {
+              BROWSER = lib.getExe' cros-container-guest-tools "garcon-url-handler";
+              NCURSES_NO_UTF8_ACS = "1";
+              QT_AUTO_SCREEN_SCALE_FACTOR = "1";
+              QT_QPA_PLATFORMTHEME = "gtk2";
+              XCURSOR_THEME = "Adwaita";
+              XDG_CONFIG_HOME = "%h/.config";
+              XDG_CURRENT_DESKTOP = "X-Generic";
+              XDG_SESSION_TYPE = "wayland";
+              # FIXME: These paths do not work under nixos
+              XDG_DATA_DIRS = "%h/.local/share:%h/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:/usr/local/share:/usr/share";
+              # PATH = "/usr/local/sbin:/usr/local/bin:/usr/local/games:/usr/sbin:/usr/bin:/usr/games:/sbin:/bin";
+            };
+          };
+
+          "sommelier@" = {
+            description = "Parent sommelier listening on socket wayland-%i";
+            path = with pkgs; [
+              systemd # systemctl
+              bash # sh
+            ];
+            serviceConfig = {
+              Type = "notify";
+              ExecStart = ''
+                /opt/google/cros-containers/bin/sommelier \
+                              --parent \
+                              --sd-notify="READY=1" \
+                              --socket=wayland-%i \
+                              --stable-scaling \
+                              --enable-linux-dmabuf \
+                              sh -c \
+                                  "systemctl --user set-environment ''${WAYLAND_DISPLAY_VAR}=$''${WAYLAND_DISPLAY}; \
+                                   systemctl --user import-environment SOMMELIER_VERSION"
+              '';
+              ExecStopPost = "/opt/google/cros-containers/bin/guest_service_failure_notifier sommelier";
+            };
+            environment = {
+              WAYLAND_DISPLAY_VAR = "WAYLAND_DISPLAY";
+              SOMMELIER_SCALE = "1.0";
+              # From `cros-sommelier-override`
+              SOMMELIER_ACCELERATORS = "Super_L,<Alt>bracketleft,<Alt>bracketright,<Alt>tab";
+            };
+          };
+
+          "sommelier-x@" = {
+            description = "Parent sommelier listening on socket wayland-%i";
+            path = with pkgs; [
+              systemd # systemctl
+              bash # sh
+              xauth
+              tinyxxd
+            ];
+            serviceConfig = {
+              Type = "notify";
+              ExecStart = ''
+                /opt/google/cros-containers/bin/sommelier \
+                  -X \
+                  --x-display=%i \
+                  --sd-notify="READY=1" \
+                  --no-exit-with-child \
+                  --x-auth="''${HOME}/.Xauthority" \
+                  ${lib.optionalString config.crostini.sommelier.stableScaling "--stable-scaling"} \
+                  --enable-xshape \
+                  --enable-linux-dmabuf \
+                  sh -c \
+                      "systemctl --user set-environment ''${DISPLAY_VAR}=$''${DISPLAY}; \
+                       systemctl --user set-environment ''${XCURSOR_SIZE_VAR}=$''${XCURSOR_SIZE}; \
+                       systemctl --user import-environment SOMMELIER_VERSION; \
+                       touch ''${HOME}/.Xauthority; \
+                       xauth -f ''${HOME}/.Xauthority add $''${DISPLAY} . $(xxd -l 16 -p /dev/urandom); \
+                       . /etc/sommelierrc"
+              '';
+              ExecStopPost = "/opt/google/cros-containers/bin/guest_service_failure_notifier sommelier-x";
+            };
+            environment = {
+              # TODO: Set `SOMMELIER_XFONT_PATH`
+              DISPLAY_VAR = "DISPLAY";
+              XCURSOR_SIZE_VAR = "XCURSOR_SIZE";
+              SOMMELIER_SCALE = "1.0";
+              # From `cros-sommelier-x-override`
+              SOMMELIER_FRAME_COLOR = "#F2F2F2";
+              SOMMELIER_ACCELERATORS = "Super_L,<Alt>bracketleft,<Alt>bracketright,<Alt>tab";
+            };
+          };
+        };
+
+        targets.default.wants = [
+          "sommelier@0.service"
+          "sommelier@1.service"
+          "sommelier-x@0.service"
+          "sommelier-x@1.service"
+        ];
+
+        services."sommelier@1" = low-density-overrides;
+        services."sommelier-x@1" = low-density-overrides;
+      };
+
+      # Suppress a few un-needed daemons
+      services."console-getty".enable = false;
+      services."getty@".enable = false;
+    };
   };
 }
