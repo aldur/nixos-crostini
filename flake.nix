@@ -95,7 +95,12 @@
 
       checks = forAllSystems (system: {
         inherit (self.outputs.packages.${system}) baguette-tarball lxc-image-and-metadata;
+        baguette-boot = self.lib.mkBaguetteTest {
+          configuration = baguetteSystem { targetSystem = system; };
+        };
       });
+
+      lib.mkBaguetteTest = import ./tests/baguette-boot.nix { inherit (nixpkgs) lib; };
 
       nixosConfigurations = {
         # This allows you to re-build the image from inside the container/VM.
