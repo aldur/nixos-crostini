@@ -175,6 +175,8 @@ let
     echo "PROBE sommelier $(as_user systemctl --user is-active sommelier@0.service 2>&1)" \
       "$(test -S /run/user/1000/wayland-0 && echo wayland-0 || echo no-socket)"
     as_user systemctl --user status sommelier@0.service --no-pager 2>&1 | tail -n 5
+    echo "PROBE sommelier-instances $(as_user systemctl --user list-units --all --plain --no-legend 'sommelier*' \
+      | awk '{ print $1 }' | LC_ALL=C sort | tr '\n' ' ')"
 
     ${extraProbe}
 
@@ -251,6 +253,8 @@ let
     "init /nix/store/.*/\\(init\\|prepare-root\\)"
     "usermod /nix/store/.*/usermod"
     "sommelier active wayland-0$"
+    # Only the instances that default.target wants. No `@default`.
+    "sommelier-instances sommelier-x@0.service sommelier-x@1.service sommelier@0.service sommelier@1.service $"
     # Older nixpkgs uses extraConfig; both spellings enable forwarding.
     "journald ForwardToConsole=\\(true\\|yes\\)$"
   ]

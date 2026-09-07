@@ -139,7 +139,6 @@ in
 
         "sommelier@" = {
           description = "Parent sommelier listening on socket wayland-%i";
-          wantedBy = [ "default.target" ];
           path = with pkgs; [
             systemd # systemctl
             bash # sh
@@ -169,7 +168,6 @@ in
 
         "sommelier-x@" = {
           description = "Parent sommelier listening on socket wayland-%i";
-          wantedBy = [ "default.target" ];
           path = with pkgs; [
             systemd # systemctl
             bash # sh
@@ -193,7 +191,7 @@ in
                      systemctl --user set-environment ''${XCURSOR_SIZE_VAR}=$''${XCURSOR_SIZE}; \
                      systemctl --user import-environment SOMMELIER_VERSION; \
                      touch ''${HOME}/.Xauthority; \
-                     xauth -f ''${HOME}/.Xauthority add :%i . $(xxd -l 16 -p /dev/urandom); \
+                     xauth -f ''${HOME}/.Xauthority add $''${DISPLAY} . $(xxd -l 16 -p /dev/urandom); \
                      . /etc/sommelierrc"
             '';
             ExecStopPost = "/opt/google/cros-containers/bin/guest_service_failure_notifier sommelier-x";
