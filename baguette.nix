@@ -4,6 +4,7 @@
     pkgs,
     config,
     lib,
+    options,
     ...
   }:
   let
@@ -107,9 +108,12 @@
         '';
 
         # https://chromium.googlesource.com/chromiumos/platform2/+/HEAD/vm_tools/baguette_image/src/data/usr/local/lib/systemd/journald.conf.d/50-console.conf?autodive=0%2F%2F%2F
-        journald.extraConfig = ''
-          ForwardToConsole=yes
-        '';
+        # TODO: Remove the extraConfig fallback once NixOS 26.11 ships.
+        journald =
+          if options.services.journald ? settings then
+            { settings.Journal.ForwardToConsole = true; }
+          else
+            { extraConfig = "ForwardToConsole=yes"; };
 
         # D-Bus service for cros-notificationd activation
         # https://chromium.googlesource.com/chromiumos/containers/cros-container-guest-tools/+/refs/heads/main/cros-notificationd/org.freedesktop.Notifications.service
