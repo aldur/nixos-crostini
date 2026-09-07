@@ -9,10 +9,14 @@
 #
 # ChromeOS mounts a `cros-vm-tools` disk with maitred, vshd, garcon, and
 # sommelier. Those binaries are not public. The test mounts a disk with that
-# label that carries sommelier from nixpkgs, stand-ins for the daemons, the
-# probe, and the files the caller passes. So the test covers the guest side
-# of the ChromeOS integration, not the host side: the ChromeOS daemons that
-# talk to maitred and garcon have no counterpart here.
+# label that carries sommelier and Xwayland from nixpkgs, stand-ins for the
+# daemons, the probe, and the files the caller passes. So the test covers
+# the guest side of the ChromeOS integration, not the host side: the
+# ChromeOS daemons that talk to maitred and garcon have no counterpart here.
+#
+# The windows of the guest go to a compositor on the host. The test runs a
+# headless weston next to crosvm, which proxies its socket to the guest.
+# So sommelier, Xwayland, and an X client run as they do on ChromeOS.
 { lib }:
 {
   # The `nixosSystem` that builds the image. It must import
@@ -52,17 +56,35 @@ let
   # The image, and the probe unit that the initrd drops into it.
   shipped = configuration.config.system.build;
 
-  # After the root mount, the initrd drops the probe units into the image.
-  # systemd also reads /usr/lib/systemd/system on NixOS. The probe script
-  # itself comes from the tools disk. `$1` is the mounted root.
+  # After the root mount, the initrd drops the units of the test into the
+  # image. systemd also reads /usr/lib/systemd/system on NixOS. The probe
+  # script itself comes from the tools disk. `$1` is the mounted root.
+  #
+  # The tools disk carries the store paths that the image lacks. An overlay
+  # puts them under /nix/store, so the tools and Xwayland find their
+  # libraries and helpers at the paths their build compiled in.
   #
   # A timer starts the probe. A service wanted by multi-user.target could
   # not wait for that target: a cycle. The timer is outside the boot
   # transaction, so the probe runs after every unit of the boot has ended,
   # and sees which ones failed.
-  injectProbe = ''
+  injectUnits = ''
     units=$1/usr/lib/systemd/system
-    mkdir -p $units/timers.target.wants
+    mkdir -p $units/timers.target.wants $units/local-fs.target.wants
+    cat > $units/baguette-tools-store.service <<'EOF'
+    [Unit]
+    Description=Overlay the store paths of the tools disk
+    DefaultDependencies=no
+    Requires=opt-google-cros\x2dcontainers.mount
+    After=opt-google-cros\x2dcontainers.mount
+    Before=local-fs.target
+
+    [Service]
+    Type=oneshot
+    RemainAfterExit=yes
+    ExecStart=/run/current-system/sw/bin/mount -t overlay overlay -o lowerdir=/opt/google/cros-containers/store:/nix/store /nix/store
+    EOF
+    ln -sf ../baguette-tools-store.service $units/local-fs.target.wants/
     cat > $units/baguette-probe.timer <<'EOF'
     [Unit]
     Description=Start the Baguette boot probe after the boot
@@ -105,14 +127,15 @@ let
           # The image loads no modules of its own: the ChromeOS kernel has
           # them built in. The initrd loads the ones the guest needs from
           # the NixOS kernel: virtio-gpu for the GBM device of sommelier,
-          # fuse for envfs.
+          # fuse for envfs, overlay for the store paths of the tools disk.
           boot.initrd.kernelModules = [
             "virtio_gpu"
             "fuse"
+            "overlay"
           ];
           boot.initrd.postMountCommands = ''
             set -- $targetRoot
-            ${injectProbe}
+            ${injectUnits}
           '';
         }
         # preservation asserts a systemd initrd. This variant only lends
@@ -178,19 +201,54 @@ let
     echo "PROBE sommelier-instances $(as_user systemctl --user list-units --all --plain --no-legend 'sommelier*' \
       | awk '{ print $1 }' | LC_ALL=C sort | tr '\n' ' ')"
 
+    # The X path. sommelier-x reports ready after Xwayland is up and its
+    # cookie step ran. Each instance then owns a display, and the user
+    # manager has its number. An X client must get in with the cookie of
+    # the user, and must not get in without one.
+    for _ in $(seq 60); do
+      ready=$(as_user systemctl --user is-active sommelier-x@0.service sommelier-x@1.service 2>/dev/null | grep -c '^active$')
+      [ "$ready" = 2 ] && break
+      sleep 1
+    done
+    as_user systemctl --user status 'sommelier-x@*' --no-pager 2>&1 | grep -E 'service|Active|sommelier|Xwayland|xauth' | tail -n 12
+    echo "PROBE user-failed [$(as_user systemctl --user list-units --state=failed --no-legend --plain | awk '{ print $1 }' | tr '\n' ' ')]"
+    echo "PROBE display $(as_user systemctl --user show-environment | grep -E '^(WAYLAND_)?DISPLAY(_LOW_DENSITY)?=' | LC_ALL=C sort | tr '\n' ' ')"
+    xauthority=/home/$user/.Xauthority
+    for display in :0 :1; do
+      cookies=$(as_user ${lib.getExe pkgs.xauth} -f $xauthority list $display 2>/dev/null | wc -l)
+      client=$(as_user env DISPLAY=$display XAUTHORITY=$xauthority ${lib.getExe pkgs.xorg.xdpyinfo} >/dev/null 2>&1 && echo ok || echo fail)
+      noauth=$(as_user env DISPLAY=$display XAUTHORITY=/dev/null ${lib.getExe pkgs.xorg.xdpyinfo} >/dev/null 2>&1 && echo accepted || echo refused)
+      echo "PROBE x $display cookies=$cookies client=$client noauth=$noauth"
+    done
+
     ${extraProbe}
 
     echo "PROBE DONE"
   '';
 
+  # Xwayland does not start without the `fixed` and `cursor` fonts. One
+  # directory holds both, with the alias file that names `fixed`.
+  xfonts = pkgs.runCommand "baguette-xfonts" { nativeBuildInputs = [ pkgs.xorg.mkfontscale ]; } ''
+    mkdir -p $out/misc
+    cp ${pkgs.xorg.fontmiscmisc}/share/fonts/X11/misc/*.pcf.gz \
+      ${pkgs.xorg.fontcursormisc}/share/fonts/X11/misc/*.pcf.gz \
+      ${pkgs.xorg.fontalias}/share/fonts/X11/misc/fonts.alias $out/misc/
+    mkfontdir $out/misc
+  '';
+
   # The tools of ChromeOS bring their own libraries and dynamic linker.
-  # sommelier from nixpkgs finds most of its libraries in the store of the
-  # image, at the same paths. The tools disk carries the rest, mainly the
-  # GBM backend of mesa, which the image does not ship.
+  # sommelier and Xwayland from nixpkgs find most of theirs in the store
+  # of the image, at the same paths. The tools disk carries the rest, and
+  # the overlay unit above puts it under /nix/store. Mesa is the GBM
+  # backend of sommelier, which the image does not ship. xdpyinfo is the
+  # X client of the probe.
   toolsClosure = pkgs.closureInfo {
     rootPaths = [
       sommelier
       pkgs.mesa
+      pkgs.xwayland
+      xfonts
+      pkgs.xorg.xdpyinfo
     ];
   };
   imageClosure = pkgs.closureInfo { rootPaths = [ shipped.toplevel ]; };
@@ -198,7 +256,7 @@ let
   # btrfs: the initrd loads it for the root. The image has no modules for
   # the kernel of the test, so no other filesystem mounts in stage 2.
   toolsDisk = pkgs.runCommand "cros-vm-tools.img" { nativeBuildInputs = [ pkgs.btrfs-progs ]; } ''
-    mkdir -p root/bin root/lib root/probe
+    mkdir -p root/bin root/store root/probe
 
     # Stand-ins for the ChromeOS daemons. Without them, the units of the
     # image fail and restart in a loop, and that flood stalls the serial
@@ -208,29 +266,30 @@ let
     done
     printf '#!/bin/sh\nexit 0\n' > root/bin/guest_service_failure_notifier
 
-    # The store paths of the tools that the image lacks. The dynamic linker
-    # searches LD_LIBRARY_PATH before the RUNPATH of nixpkgs, so the copies
-    # win where the store path is absent.
-    libs=
+    # The store paths of the tools that the image lacks.
     for path in $(comm -13 <(sort ${imageClosure}/store-paths) <(sort ${toolsClosure}/store-paths)); do
-      [ -d $path/lib ] || continue
-      cp -r $path/lib root/lib/$(basename $path)
-      libs=$libs:/opt/google/cros-containers/lib/$(basename $path)
+      cp -a $path root/store/
     done
-    mesa=root/lib/$(basename ${pkgs.mesa})
 
     # The sommelier units of the image call this path. The channel to the
     # host is a virtio-gpu context, not the virtio-wl device of ChromeOS.
-    cp ${sommelier}/bin/sommelier root/bin/sommelier-bin
+    # Mesa of nixpkgs looks for its backends and drivers under
+    # /run/opengl-driver, which the image does not have.
     cat > root/bin/sommelier <<EOF
     #!/bin/sh
-    export LD_LIBRARY_PATH=''${libs#:}
-    export GBM_BACKENDS_PATH=/opt/google/cros-containers/''${mesa#root/}/gbm
-    export LIBGL_DRIVERS_PATH=/opt/google/cros-containers/''${mesa#root/}/dri
+    export GBM_BACKENDS_PATH=${pkgs.mesa}/lib/gbm
+    export LIBGL_DRIVERS_PATH=${pkgs.mesa}/lib/dri
+    export SOMMELIER_XWAYLAND_GL_DRIVER_PATH=${pkgs.mesa}/lib/dri
+    export SOMMELIER_XFONT_PATH=${xfonts}/misc
     exec /opt/google/cros-containers/bin/sommelier-bin --virtgpu-channel "\$@"
     EOF
-
     chmod 0755 root/bin/*
+
+    # sommelier starts Xwayland from bin/Xwayland of this disk, the path
+    # of ChromeOS.
+    ln -s ${sommelier}/bin/sommelier root/bin/sommelier-bin
+    ln -s ${pkgs.xwayland}/bin/Xwayland root/bin/Xwayland
+
     install -m 0755 ${probe} root/probe/probe.sh
     ${lib.concatStringsSep "\n" (
       lib.mapAttrsToList (target: source: "install -m 0444 ${source} root/probe/${target}") probeFiles
@@ -255,6 +314,13 @@ let
     "sommelier active wayland-0$"
     # Only the instances that default.target wants. No `@default`.
     "sommelier-instances sommelier-x@0.service sommelier-x@1.service sommelier@0.service sommelier@1.service $"
+    # The user units of the image come up too, sommelier-x among them.
+    "user-failed \\[ *\\]"
+    # Each sommelier instance publishes the display it got.
+    "display DISPLAY=:0 DISPLAY_LOW_DENSITY=:1 WAYLAND_DISPLAY=wayland-0 WAYLAND_DISPLAY_LOW_DENSITY=wayland-1 $"
+    # The cookie of each display is in the file, and Xwayland enforces it.
+    "x :0 cookies=1 client=ok noauth=refused$"
+    "x :1 cookies=1 client=ok noauth=refused$"
     # Older nixpkgs uses extraConfig; both spellings enable forwarding.
     "journald ForwardToConsole=\\(true\\|yes\\)$"
   ]
@@ -265,6 +331,7 @@ pkgs.runCommand name
     nativeBuildInputs = [
       pkgs.crosvm
       pkgs.coreutils
+      pkgs.weston
     ];
     requiredSystemFeatures = [ "kvm" ];
   }
@@ -278,15 +345,29 @@ pkgs.runCommand name
 
     # The logs go to files. Their lines end in CR and carry colors. Print
     # them clean at the end, also on failure.
-    touch console.log probe.log
+    touch console.log probe.log weston.log
     show_logs() {
-      for f in console.log probe.log; do
+      kill $weston 2>/dev/null
+      for f in console.log probe.log weston.log; do
         echo "===== $f"
         sed 's/\r$//; s/\x1b\[[0-9;?]*[a-zA-Z]//g' $f
         echo "===== end of $f"
       done
     }
     trap show_logs EXIT
+
+    # The compositor of the host. crosvm proxies its socket into the
+    # guest, where sommelier connects to it through virtio-gpu.
+    export XDG_RUNTIME_DIR=$PWD/run
+    mkdir -m 0700 $XDG_RUNTIME_DIR
+    weston --backend=headless --socket=wayland-host --idle-time=0 \
+      --shell=kiosk --no-config --log=weston.log &
+    weston=$!
+    for _ in $(seq 60); do
+      [ -S $XDG_RUNTIME_DIR/wayland-host ] && break
+      sleep 0.5
+    done
+    [ -S $XDG_RUNTIME_DIR/wayland-host ] || { echo "FAIL: weston did not start"; exit 1; }
 
     # ttyS0 is the console, ttyS1 the probe output. No getty on ttyS0: it
     # would take the console away. The GPU gives the guest a render node,
@@ -296,6 +377,7 @@ pkgs.runCommand name
       --serial type=file,path=console.log,hardware=serial,num=1,console=true \
       --serial type=file,path=probe.log,hardware=serial,num=2 \
       --gpu backend=virglrenderer,context-types=cross-domain \
+      --wayland-sock $XDG_RUNTIME_DIR/wayland-host \
       --initrd ${bootVariant.config.system.build.initialRamdisk}/initrd \
       --params "init=${shipped.toplevel}/init console=ttyS0 loglevel=4 systemd.getty_auto=no" \
       --block path=tools.img --block path=root.img \

@@ -27,12 +27,18 @@ let
     '';
   };
 
-  low-density-overrides-env = {
-    DISPLAY_VAR = "DISPLAY_LOW_DENSITY";
-    WAYLAND_DISPLAY_VAR = "WAYLAND_DISPLAY_LOW_DENSITY";
-    XCURSOR_SIZE_VAR = "XCURSOR_SIZE_LOW_DENSITY";
-    SOMMELIER_SCALE = "0.5";
-    SOMMELIER_DPI = "72,96,160,240,320,480";
+  low-density-overrides = {
+    environment = {
+      DISPLAY_VAR = "DISPLAY_LOW_DENSITY";
+      WAYLAND_DISPLAY_VAR = "WAYLAND_DISPLAY_LOW_DENSITY";
+      XCURSOR_SIZE_VAR = "XCURSOR_SIZE_LOW_DENSITY";
+      SOMMELIER_SCALE = "0.5";
+      SOMMELIER_DPI = "72,96,160,240,320,480";
+    };
+    overrideStrategy = "asDropin";
+    # A PATH in the drop-in replaces the PATH of the template, which has
+    # the tools of the child command.
+    enableDefaultPath = false;
   };
 
 in
@@ -215,10 +221,8 @@ in
         "sommelier-x@1.service"
       ];
 
-      services."sommelier@1".environment = low-density-overrides-env;
-      services."sommelier@1".overrideStrategy = "asDropin";
-      services."sommelier-x@1".environment = low-density-overrides-env;
-      services."sommelier-x@1".overrideStrategy = "asDropin";
+      services."sommelier@1" = low-density-overrides;
+      services."sommelier-x@1" = low-density-overrides;
     };
 
     # Suppress a few un-needed daemons
