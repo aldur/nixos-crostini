@@ -1,14 +1,9 @@
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    nixos-generators = {
-      url = "github:nix-community/nixos-generators";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
   };
   outputs =
     {
-      nixos-generators,
       nixpkgs,
       self,
       ...
@@ -63,16 +58,18 @@
         system:
         let
           baguette-nixos = baguetteSystem { targetSystem = system; };
+
+          # nixpkgs adds the LXC image modules through `image.modules`.
+          # See: https://nixos.org/manual/nixos/stable/#sec-image-nixos-rebuild-build-image
+          lxc-images =
+            (nixosSystemFor {
+              targetSystem = system;
+              additionalModules = [ ];
+            }).config.system.build.images;
         in
         rec {
-          lxc = nixos-generators.nixosGenerate {
-            inherit system specialArgs modules;
-            format = "lxc";
-          };
-          lxc-metadata = nixos-generators.nixosGenerate {
-            inherit system specialArgs modules;
-            format = "lxc-metadata";
-          };
+          lxc = lxc-images.lxc;
+          lxc-metadata = lxc-images.lxc-metadata;
 
           lxc-image-and-metadata = nixpkgs.legacyPackages.${system}.stdenv.mkDerivation {
             name = "lxc-image-and-metadata";
