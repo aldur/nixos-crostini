@@ -17,12 +17,18 @@ for Baguette support.
 ## Quick start
 
 1. [Install Nix][1].
-1. Enable flake support:
-   `export NIX_CONFIG="experimental-features = nix-command flakes"`.
-1. Run `nix flake init -t github:aldur/nixos-crostini` from a new directory (or
-   simply clone this repository).
-1. Edit [`./configuration.nix`](./configuration.nix) with your username;
-   later on, pick the same when configuring Linux on ChromeOS.
+1. Enable flake support: `export NIX_CONFIG="experimental-features =
+   nix-command flakes"`.
+1. Run the steps below from a new directory. Replace `YOUR-USERNAME` with the
+   username you will pick when configuring Linux on ChromeOS.
+
+```bash quick-start
+# The template of this repository. Or simply clone it.
+nix flake init -t github:aldur/nixos-crostini
+# Your username, in configuration.nix.
+sed -i 's/\baldur\b/YOUR-USERNAME/' configuration.nix
+nix flake check --no-build
+```
 
 Now build a [VM image](#baguette-quick-start) or [container image](#lxc-quick-start).
 
@@ -40,11 +46,10 @@ providing more flexibility than legacy LXC containers.
   to `./configuration.nix` with your username, the CI will build a Baguette
   NixOS image with your changes.
 
-```bash
-# Build the image
-$ nix build .#baguette-zimage
-$ ls result
-baguette_rootfs.img.zst
+```bash quick-start
+# Build the image.
+nix build .#baguette-zimage
+ls result # baguette_rootfs.img.zst
 ```
 
 Copy `baguette_rootfs.img.zst` to the Chromebook "Downloads" directory. Open
@@ -117,11 +122,10 @@ the `termina` VM][6].
 
 ### LXC: Quick start
 
-```shell
-# Build the container image and its metadata:
-$ nix build .#lxc-image-and-metadata
-$ ls result
-image.tar.xz  metadata.tar.xz
+```bash quick-start
+# Build the container image and its metadata.
+nix build .#lxc-image-and-metadata
+ls result # image.tar.xz  metadata.tar.xz
 ```
 
 That's it! See [this blog post][2] for a few ways on how to deploy the

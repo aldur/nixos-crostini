@@ -47,6 +47,17 @@ jobs:
 
       - run: nix flake check --no-build
       - run: nix build --no-link .#baguette-tarball .#lxc-image-and-metadata
+      # The quick start of the README, as written: every `quick-start`
+      # block, in order, with this checkout in place of the repository on
+      # GitHub. The copy carries the lock file, so it builds the same
+      # nixpkgs.
+      - name: Follow the quick start of the README
+        run: |
+          nix registry add github:aldur/nixos-crostini path:$GITHUB_WORKSPACE
+          awk '/^```bash quick-start$/ { on = 1; next } /^```$/ { on = 0 } on' README.md > /tmp/quick-start.sh
+          mkdir /tmp/quick-start
+          cd /tmp/quick-start
+          bash -euxo pipefail /tmp/quick-start.sh
       - name: Boot the Baguette image
         if: matrix.kvm
         run: nix build -L --out-link boot-test .#checks.${{ matrix.system }}.baguette-boot
