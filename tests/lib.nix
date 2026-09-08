@@ -62,21 +62,35 @@
     echo "PROBE sftp-server $(readlink -f /usr/lib/openssh/sftp-server)"
     echo "PROBE getty $(systemctl show -p LoadState --value console-getty.service)" \
       "$(systemctl show -p LoadState --value getty@tty1.service)"
+    # garcon hands links to the browser of the host: the MIME defaults
+    # name its desktop entry, and its handlers are on the path of a login
+    # shell, with the tools of the module.
+    echo "PROBE mime html=$(bash -lc 'xdg-mime query default text/html') https=$(bash -lc 'xdg-mime query default x-scheme-handler/https')"
+    echo "PROBE tools $(bash -lc 'command -v garcon-url-handler garcon-terminal-handler wl-copy xdg-open lsusb' | xargs -n 1 basename | tr '\n' ' ')"
+    # The UI integration: the Adwaita icons in the system path, and the
+    # theme link to the mount of ChromeOS.
+    echo "PROBE icons $(test -f /run/current-system/sw/share/icons/Adwaita/index.theme && echo adwaita || echo missing)" \
+      "$(readlink -f /run/current-system/sw/share/themes/CrosAdapta)"
   '';
 
   # Checks for the lines of `commonModuleProbe`.
-  commonModuleChecks = configuration: [
-    "hostname ${configuration.config.networking.hostName}$"
-    # tremplin looks for gshadow. sommelier sources sommelierrc.
-    "gshadow 640 shadow$"
-    "sommelierrc present$"
-    "user-units garcon.service sommelier-x@.service sommelier@.service $"
-    # The activation scripts link what the ChromeOS tools expect.
-    "xkb /nix/store/.*/share/X11$"
-    "sftp-server /nix/store/.*/libexec/sftp-server$"
-    # NixOS masks the units it disables.
-    "getty masked masked$"
-  ];
+  commonModuleChecks =
+    configuration:
+    [
+      "hostname ${configuration.config.networking.hostName}$"
+      # tremplin looks for gshadow. sommelier sources sommelierrc.
+      "gshadow 640 shadow$"
+      "sommelierrc present$"
+      "user-units garcon.service sommelier-x@.service sommelier@.service $"
+      # The activation scripts link what the ChromeOS tools expect.
+      "xkb /nix/store/.*/share/X11$"
+      "sftp-server /nix/store/.*/libexec/sftp-server$"
+      # NixOS masks the units it disables.
+      "getty masked masked$"
+      "mime html=garcon_host_browser.desktop https=garcon_host_browser.desktop$"
+      "tools garcon-url-handler garcon-terminal-handler wl-copy xdg-open lsusb $"
+    ]
+    ++ lib.optional configuration.config.crostini.ui.enable "icons adwaita /opt/google/cros-containers/cros-adapta$";
 
   # A switch to a generation from inside the guest, as the end of
   # `nixos-rebuild switch`. The lines report the result, the links it
