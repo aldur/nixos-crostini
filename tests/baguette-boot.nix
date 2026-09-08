@@ -236,6 +236,21 @@ let
     as_user systemctl --user status 'sommelier-x@*' --no-pager 2>&1 | grep -E 'service|Active|sommelier|Xwayland|xauth' | tail -n 12
     echo "PROBE user-failed [$(as_user systemctl --user list-units --state=failed --no-legend --plain | awk '{ print $1 }' | tr '\n' ' ')]"
     echo "PROBE display $(as_user systemctl --user show-environment | grep -E '^(WAYLAND_)?DISPLAY(_LOW_DENSITY)?=' | LC_ALL=C sort | tr '\n' ' ')"
+    # A terminal of ChromeOS opens a login shell with a bare environment.
+    # The profile scripts of the image then export the session variables,
+    # the displays of sommelier, and the theme variables, in that order:
+    # the script of sommelier asks the user manager, which it finds through
+    # the runtime directory the script of Baguette sets.
+    login_env() {
+      runuser -u $user -- env -i HOME=/home/$user TERM=xterm bash -l -c \
+        'for v in "$@"; do eval "echo $v=\$$v"; done' bash "$@" 2>&1 | LC_ALL=C sort | tr '\n' ' '
+    }
+    manager=$(as_user systemctl --user show-environment | grep -E '^(WAYLAND_)?DISPLAY(_LOW_DENSITY)?=|^XCURSOR_SIZE(_LOW_DENSITY)?=' | LC_ALL=C sort | tr '\n' ' ')
+    shell=$(login_env DISPLAY DISPLAY_LOW_DENSITY WAYLAND_DISPLAY WAYLAND_DISPLAY_LOW_DENSITY XCURSOR_SIZE XCURSOR_SIZE_LOW_DENSITY)
+    echo "PROBE login-sommelier $([ "$manager" = "$shell" ] && echo match || echo differ) $shell"
+    echo "PROBE login-session $(login_env DBUS_SESSION_BUS_ADDRESS USER XDG_RUNTIME_DIR XDG_SESSION_TYPE)"
+    echo "PROBE login-theme $(login_env GTK2_RC_FILES GTK_DATA_PREFIX XCURSOR_THEME)"
+
     xauthority=/home/$user/.Xauthority
     for display in :0 :1; do
       cookies=$(as_user ${lib.getExe pkgs.xauth} -f $xauthority list $display 2>/dev/null | wc -l)
@@ -440,6 +455,10 @@ let
       # the X display number, so the two X instances get :0 and :1 in the
       # order they start.
       "display DISPLAY=:(0 DISPLAY_LOW_DENSITY=:1|1 DISPLAY_LOW_DENSITY=:0) WAYLAND_DISPLAY=wayland-0 WAYLAND_DISPLAY_LOW_DENSITY=wayland-1 $"
+      # A login shell gets the displays the user manager knows, and the
+      # session variables of the Baguette profile script.
+      "login-sommelier match DISPLAY=:[0-9]+ DISPLAY_LOW_DENSITY=:[0-9]+ WAYLAND_DISPLAY=wayland-0 WAYLAND_DISPLAY_LOW_DENSITY=wayland-1 XCURSOR_SIZE=[0-9]+ XCURSOR_SIZE_LOW_DENSITY=[0-9]+ $"
+      "login-session DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus USER=${user} XDG_RUNTIME_DIR=/run/user/1000 XDG_SESSION_TYPE=wayland $"
       # The cookie of each display is in the file, and Xwayland enforces it.
       "x :0 cookies=1 client=ok noauth=refused$"
       "x :1 cookies=1 client=ok noauth=refused$"
@@ -447,6 +466,8 @@ let
       "journald ForwardToConsole=(true|yes)$"
     ]
     ++ lib.optionals checkGtk2 [
+      # The theme variables of the UI integration reach the login shell.
+      "login-theme GTK2_RC_FILES=/etc/gtk-2.0/gtkrc GTK_DATA_PREFIX=/run/current-system/sw XCURSOR_THEME=Adwaita $"
       "gtk2 :0 ok$"
       "gtk2 :1 ok$"
       "after-gui sommelier-x@0.service active restarts=0$"
