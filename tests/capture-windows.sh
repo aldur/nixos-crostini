@@ -1,4 +1,5 @@
-# Run beside crosvm, with XDG_RUNTIME_DIR and WAYLAND_DISPLAY set by the test.
+# Run beside crosvm, with XDG_RUNTIME_DIR and WAYLAND_DISPLAY set by the test,
+# and the directory of the screenshots as the argument.
 # The probe opens the windows in the order below, each titled after the
 # variable that gave its display. Each capture also reports the size of
 # the window on the host, and the ratio between the low-density instance
@@ -29,6 +30,7 @@ scale() {
   fi
 }
 
+screenshots=$1
 declare -A size
 for slug in gtk2-normal gtk2-low gtk3-normal gtk3-low; do
   # The closing quote of the title keeps `DISPLAY` apart from
@@ -39,7 +41,7 @@ for slug in gtk2-normal gtk2-low gtk3-normal gtk3-low; do
     gtk3-normal) title="Baguette GTK3 WAYLAND_DISPLAY'" ;;
     gtk3-low) title="Baguette GTK3 WAYLAND_DISPLAY_LOW_DENSITY'" ;;
   esac
-  directory="screenshots/$slug"
+  directory="$screenshots/$slug"
   mkdir -p "$directory"
   # Check the host's scene graph as well: X11 mapping alone does not prove
   # that Sommelier has submitted the window to the host compositor.
@@ -55,7 +57,7 @@ for slug in gtk2-normal gtk2-low gtk3-normal gtk3-low; do
   # Let the first widget paints reach the compositor before its capture.
   sleep 1
   (cd "$directory" && weston-screenshooter)
-  mv "$directory"/wayland-screenshot-*.png "screenshots/$slug.png"
+  mv "$directory"/wayland-screenshot-*.png "$screenshots/$slug.png"
   size[$slug]=$(window_size "$title" "$directory/scene.log")
   echo "Captured $title"
   echo "PROBE host-window $slug ${size[$slug]}"

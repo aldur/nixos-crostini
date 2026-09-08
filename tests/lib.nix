@@ -50,6 +50,34 @@
     echo "PROBE DONE"
   '';
 
+  # The parts of the common module that both images carry: the files the
+  # ChromeOS tools look for, the user units, the links of the activation
+  # scripts, and the daemons the module turns off.
+  commonModuleProbe = ''
+    echo "PROBE hostname $(cat /proc/sys/kernel/hostname)"
+    echo "PROBE gshadow $(stat -c '%a %G' /etc/gshadow)"
+    echo "PROBE sommelierrc $(test -f /etc/sommelierrc && echo present || echo missing)"
+    echo "PROBE user-units $(cd /etc/systemd/user && ls -d garcon.service sommelier@.service sommelier-x@.service 2>&1 | LC_ALL=C sort | tr '\n' ' ')"
+    echo "PROBE xkb $(readlink -f /usr/share/X11)"
+    echo "PROBE sftp-server $(readlink -f /usr/lib/openssh/sftp-server)"
+    echo "PROBE getty $(systemctl show -p LoadState --value console-getty.service)" \
+      "$(systemctl show -p LoadState --value getty@tty1.service)"
+  '';
+
+  # Checks for the lines of `commonModuleProbe`.
+  commonModuleChecks = configuration: [
+    "hostname ${configuration.config.networking.hostName}$"
+    # tremplin looks for gshadow. sommelier sources sommelierrc.
+    "gshadow 640 shadow$"
+    "sommelierrc present$"
+    "user-units garcon.service sommelier-x@.service sommelier@.service $"
+    # The activation scripts link what the ChromeOS tools expect.
+    "xkb /nix/store/.*/share/X11$"
+    "sftp-server /nix/store/.*/libexec/sftp-server$"
+    # NixOS masks the units it disables.
+    "getty masked masked$"
+  ];
+
   # A switch to a generation from inside the guest, as the end of
   # `nixos-rebuild switch`. The lines report the result, the links it
   # leaves, the warnings in its output, and the failed system units.

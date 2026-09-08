@@ -17,6 +17,11 @@
 # The windows of the guest go to a compositor on the host. The test runs a
 # headless weston next to crosvm, which proxies its socket to the guest.
 # So sommelier, Xwayland, and an X client run as they do on ChromeOS.
+#
+# The disk boots twice, through /sbin/init as on ChromeOS. The first boot
+# switches to a second generation from inside the guest, as
+# `nixos-rebuild` does. The second boot lands on that generation, and
+# sees the state the first boot left.
 { lib }:
 let
   shared = import ./lib.nix { inherit lib; };
@@ -52,35 +57,35 @@ let
   # The image, and the probe unit that the initrd drops into it.
   shipped = configuration.config.system.build;
 
-  # After the root mount, the initrd drops the units of the test into the
-  # image. systemd also reads /usr/lib/systemd/system on NixOS. The probe
-  # script itself comes from the tools disk. `$1` is the mounted root.
+  # After the root mount, the initrd mounts the tools disk and drops the
+  # units of the test into the image. systemd also reads
+  # /usr/lib/systemd/system on NixOS. The probe script itself comes from
+  # the tools disk. `$1` is the mounted root.
   #
   # The tools disk carries the store paths that the image lacks. An overlay
   # puts them under /nix/store, so the tools and Xwayland find their
-  # libraries and helpers at the paths their build compiled in.
+  # libraries and helpers at the paths their build compiled in. The overlay
+  # must be up before the kernel starts /sbin/init: after a switch, that
+  # link points into the next generation, which is on the tools disk. The
+  # mounts move into the root with `switch_root`, and the mount unit of
+  # the image finds the tools disk in place. The tools disk is the first
+  # block device of crosvm. Nix writes to the store at boot, so the
+  # overlay takes its upper layer from the root disk.
   #
   # A timer starts the probe. A service wanted by multi-user.target could
   # not wait for that target: a cycle. The timer is outside the boot
   # transaction, so the probe runs after every unit of the boot has ended,
   # and sees which ones failed.
   injectUnits = ''
-    units=$1/usr/lib/systemd/system
-    mkdir -p $units/timers.target.wants $units/local-fs.target.wants
-    cat > $units/baguette-tools-store.service <<'EOF'
-    [Unit]
-    Description=Overlay the store paths of the tools disk
-    DefaultDependencies=no
-    Requires=opt-google-cros\x2dcontainers.mount
-    After=opt-google-cros\x2dcontainers.mount
-    Before=local-fs.target
+    mkdir -p $1/opt/google/cros-containers
+    mount -t btrfs -o ro /dev/vda $1/opt/google/cros-containers
+    mkdir -p $1/nix/.tools-overlay/upper $1/nix/.tools-overlay/work
+    mount -t overlay overlay \
+      -o lowerdir=$1/opt/google/cros-containers/store:$1/nix/store,upperdir=$1/nix/.tools-overlay/upper,workdir=$1/nix/.tools-overlay/work \
+      $1/nix/store
 
-    [Service]
-    Type=oneshot
-    RemainAfterExit=yes
-    ExecStart=/run/current-system/sw/bin/mount -t overlay overlay -o lowerdir=/opt/google/cros-containers/store:/nix/store /nix/store
-    EOF
-    ln -sf ../baguette-tools-store.service $units/local-fs.target.wants/
+    units=$1/usr/lib/systemd/system
+    mkdir -p $units/timers.target.wants
     cat > $units/baguette-probe.timer <<'EOF'
     [Unit]
     Description=Start the Baguette boot probe after the boot
@@ -230,11 +235,25 @@ let
         }
       '';
     }}
+    # The boot registers the store in the Nix database, sets the system
+    # profile, and takes the DNS of the host. The activation links what
+    # the ChromeOS tools expect. All of it holds on the next boot too.
+    echo "PROBE system $(readlink -f /run/current-system)"
+    echo "PROBE profile $(readlink -f /nix/var/nix/profiles/system)"
+    echo "PROBE nix-db $(nix-store -q --hash /run/current-system >/dev/null 2>/tmp/nix-db.log && echo valid || echo "invalid $(head -c 200 /tmp/nix-db.log)")" \
+      "$(test -e /nix-path-registration && echo registration-left || echo registration-consumed)"
+    echo "PROBE init $(readlink /sbin/init)"
+    echo "PROBE resolv $(readlink /etc/resolv.conf)"
     echo "PROBE home $(stat -c '%U %a' /home/$user)"
     echo "PROBE root $(findmnt -n -b -o FSTYPE,SIZE /)"
-    echo "PROBE init $(readlink /sbin/init)"
+    echo "PROBE boot-dir $(test -d /boot && echo present || echo missing)"
     echo "PROBE usermod $(readlink /usr/sbin/usermod)"
+    echo "PROBE zoneinfo $(readlink /usr/share/zoneinfo)"
+    echo "PROBE groups $(getent group kvm netdev sudo tss | cut -d : -f 1 | tr '\n' ' ')"
+    echo "PROBE hosts $(getent hosts arc | awk '{ print $1 }')"
+    echo "PROBE udev $(grep -l 'KERNEL=="wl\*", MODE="0666"' /etc/udev/rules.d/* | xargs -n 1 basename | tr '\n' ' ')"
     echo "PROBE journald $(grep '^ForwardToConsole=' /etc/systemd/journald.conf)"
+    ${shared.commonModuleProbe}
 
     # The windows of the guest go through sommelier. Its units come from
     # the image; the binary and its GBM backend come from the tools disk.
@@ -251,6 +270,8 @@ let
     as_user systemctl --user status sommelier@0.service --no-pager 2>&1 | tail -n 5
     echo "PROBE sommelier-instances $(as_user systemctl --user list-units --all --plain --no-legend 'sommelier*' \
       | awk '{ print $1 }' | LC_ALL=C sort | tr '\n' ' ')"
+    # The session bus can start the notification server of ChromeOS.
+    echo "PROBE notifications $(as_user busctl --user list --activatable --no-legend | grep -c '^org.freedesktop.Notifications ')"
 
     # The X path. sommelier-x reports ready after Xwayland is up and its
     # cookie step ran. Each instance then owns a display, and the user
@@ -376,7 +397,7 @@ let
     # and runs the switch script. The three X instances of each manager
     # run under the live session, and the switch restarts them all.
     nix-store --load-db < $probe/next-registration
-    nix-env -p /nix/var/nix/profiles/system --set ${nextToplevel}
+    echo "PROBE profile-set $(nix-env -p /nix/var/nix/profiles/system --set ${nextToplevel} 2>&1 && echo ok || echo fail) $(readlink -f /nix/var/nix/profiles/system)"
     ${shared.switchProbe nextToplevel}
     echo "PROBE switch-user-failed [$(failed_units as_user systemctl --user)]"
     echo "PROBE switch-template stable-scaling=$(as_user systemctl --user show sommelier-x@0.service -p ExecStart --value | grep -q -- --stable-scaling && echo yes || echo no)"
@@ -480,15 +501,29 @@ let
   xState = "active active active DISPLAY=:[0-9]+ DISPLAY_LOW_DENSITY=:[0-9]+ DISPLAY=ok DISPLAY_LOW_DENSITY=ok $";
 
   # The stand-ins keep the units of the image from failing, so the shared
-  # check on failed units counts the units of the image only.
-  checks =
+  # check on failed units counts the units of the image only. `booted` is
+  # the generation the boot came from.
+  checksFor =
+    booted:
     shared.commonChecks user
+    ++ shared.commonModuleChecks configuration
     ++ [
+      "system ${booted}$"
+      "profile ${booted}$"
+      "nix-db valid registration-consumed$"
+      # The activation links the stage-2 script of the generation: `init`,
+      # or `prepare-root` with the systemd initrd.
+      "init ${booted}/${initScript}$"
+      "resolv /run/resolv.conf$"
       "home ${user} ${configuration.config.users.users.${user}.homeMode}$"
-      # The Baguette module links both. The init link is the stage-2 script:
-      # `init`, or `prepare-root` with the systemd initrd.
-      "init /nix/store/.*/(init|prepare-root)"
+      "boot-dir present$"
       "usermod /nix/store/.*/usermod"
+      "zoneinfo /etc/zoneinfo$"
+      # The groups that `vmc start` expects, and the host name of ARC.
+      "groups kvm netdev sudo tss $"
+      "hosts 100.115.92.2$"
+      "udev 99-local.rules $"
+      "notifications 1$"
       "sommelier active wayland-0$"
       # Only the instances that default.target wants. No `@default`.
       "sommelier-instances sommelier-x@0.service sommelier-x@1.service sommelier@0.service sommelier@1.service $"
@@ -518,6 +553,7 @@ let
       "switch-root-x ${xState}"
       # The switch restarts the sommelier instances with the new template,
       # and the user manager ends with no failed unit.
+      "profile-set ok ${nextToplevel}$"
       "switch-user-failed \\[ *\\]"
       "switch-template stable-scaling=${if nextStableScaling then "yes" else "no"}$"
       "switch-x ${xState}"
@@ -549,7 +585,13 @@ let
     ]
     ++ extraChecks;
 
-  checkProbes = shared.mkCheckProbes pkgs checks;
+  checkProbes = booted: shared.mkCheckProbes pkgs (checksFor booted);
+
+  initScript =
+    if configuration.config.boot.initrd.enable && configuration.config.boot.initrd.systemd.enable then
+      "prepare-root"
+    else
+      "init";
 in
 pkgs.runCommand name
   {
@@ -570,11 +612,12 @@ pkgs.runCommand name
 
     # The logs go to files. Their lines end in CR and carry colors. Print
     # them clean at the end, also on failure.
-    touch console.log probe.log weston.log capture.log
+    logs=weston.log
+    touch $logs
     show_logs() {
       ${lib.optionalString checkUi "kill $capture 2>/dev/null || true"}
       kill $weston 2>/dev/null
-      for f in console.log probe.log weston.log capture.log; do
+      for f in $logs; do
         echo "===== $f"
         sed 's/\r$//; s/\x1b\[[0-9;?]*[a-zA-Z]//g' $f
         echo "===== end of $f"
@@ -604,53 +647,62 @@ pkgs.runCommand name
     done
     [ -S $XDG_RUNTIME_DIR/wayland-host ] || { echo "FAIL: weston did not start"; exit 1; }
 
-    ${lib.optionalString checkUi ''
-      timeout ${toString timeout} bash ${./capture-windows.sh} > capture.log 2>&1 &
-      capture=$!
-    ''}
-
+    # One boot of the disk, with the checks for the generation it boots.
     # ttyS0 is the console, ttyS1 the probe output. No getty on ttyS0: it
     # would take the console away. The GPU gives the guest a render node,
-    # which sommelier needs.
+    # which sommelier needs. The kernel starts /sbin/init, as the kernel
+    # of ChromeOS does.
     status=0
-    timeout ${toString timeout} crosvm run --disable-sandbox --cpus 2 --mem 3072 \
-      --serial type=file,path=console.log,hardware=serial,num=1,console=true \
-      --serial type=file,path=probe.log,hardware=serial,num=2 \
-      --gpu backend=virglrenderer,context-types=cross-domain \
-      --wayland-sock $XDG_RUNTIME_DIR/wayland-host \
-      --initrd ${bootVariant.config.system.build.initialRamdisk}/initrd \
-      --params "init=${shipped.toplevel}/init console=ttyS0 loglevel=4 systemd.getty_auto=no" \
-      --block path=tools.img --block path=root.img \
-      ${bootVariant.config.system.build.kernel}/${bootVariant.config.system.boot.loader.kernelFile} \
-      > crosvm.log 2>&1 || {
-      echo "crosvm exit $?"
-      tail -n 20 crosvm.log
-      status=1
-    }
-
-    ${lib.optionalString checkUi ''
-      # The VM has stopped, so a missing screenshot cannot arrive later.
-      for slug in gtk2-normal gtk2-low gtk3-normal gtk3-low; do
-        [ -s screenshots/$slug.png ] && continue
-        echo "FAIL: window $slug was not captured"
-        kill $capture 2>/dev/null || true
+    boot() {
+      local n=$1 check=$2
+      logs="$logs console-$n.log probe-$n.log capture-$n.log"
+      touch console-$n.log probe-$n.log capture-$n.log
+      ${lib.optionalString checkUi ''
+        timeout ${toString timeout} bash ${./capture-windows.sh} screenshots/boot-$n > capture-$n.log 2>&1 &
+        capture=$!
+      ''}
+      timeout ${toString timeout} crosvm run --disable-sandbox --cpus 2 --mem 3072 \
+        --serial type=file,path=console-$n.log,hardware=serial,num=1,console=true \
+        --serial type=file,path=probe-$n.log,hardware=serial,num=2 \
+        --gpu backend=virglrenderer,context-types=cross-domain \
+        --wayland-sock $XDG_RUNTIME_DIR/wayland-host \
+        --initrd ${bootVariant.config.system.build.initialRamdisk}/initrd \
+        --params "init=/sbin/init console=ttyS0 loglevel=4 systemd.getty_auto=no" \
+        --block path=tools.img --block path=root.img \
+        ${bootVariant.config.system.build.kernel}/${bootVariant.config.system.boot.loader.kernelFile} \
+        > crosvm-$n.log 2>&1 || {
+        echo "crosvm exit $?"
+        tail -n 20 crosvm-$n.log
         status=1
-      done
-      wait $capture || status=1
-    ''}
+      }
+
+      ${lib.optionalString checkUi ''
+        # The VM has stopped, so a missing screenshot cannot arrive later.
+        for slug in gtk2-normal gtk2-low gtk3-normal gtk3-low; do
+          [ -s screenshots/boot-$n/$slug.png ] && continue
+          echo "FAIL: window $slug of boot $n was not captured"
+          kill $capture 2>/dev/null || true
+          status=1
+        done
+        wait $capture || status=1
+      ''}
+
+      # The capture reports the windows of the host in PROBE lines too.
+      cat probe-$n.log capture-$n.log > all-$n.log
+      $check all-$n.log > probes-$n || status=1
+      cat probes-$n
+    }
+    boot 1 ${checkProbes shipped.toplevel}
+    boot 2 ${checkProbes nextToplevel}
+
     mkdir -p $out
-    cp console.log probe.log crosvm.log weston.log capture.log $out/
+    cp *.log $out/
     ${lib.optionalString checkUi ''
       if [ -d screenshots ]; then cp -r screenshots $out/; fi
     ''}
 
-    # The capture reports the windows of the host in PROBE lines too.
-    cat probe.log capture.log > all.log
-    ${checkProbes} all.log > probes || status=1
-    cat probes
-
     # Activation grows the filesystem to the size of the disk.
-    root_size=$(grep -o '^PROBE root btrfs *[0-9]*' probes | grep -o '[0-9]*$' || true)
+    root_size=$(grep -o '^PROBE root btrfs *[0-9]*' probes-1 | grep -o '[0-9]*$' || true)
     if [ -z "$root_size" ] || [ "$root_size" -le "$image_size" ]; then
       echo "FAIL: root filesystem not grown: $root_size <= $image_size"
       status=1

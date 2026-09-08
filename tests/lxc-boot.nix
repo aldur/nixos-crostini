@@ -55,21 +55,13 @@ let
     # copies the init script; a switch links it.
     echo "PROBE system $(readlink -f /run/current-system)"
     echo "PROBE init $(cmp -s /sbin/init /run/current-system/init && echo current-system || echo other)"
-    echo "PROBE hostname $(cat /proc/sys/kernel/hostname)"
 
     # The crostini module.
     echo "PROBE nix-remote [$(bash -lc 'printf %s "$NIX_REMOTE"')]"
     echo "PROBE channel $(systemctl show -p LoadState --value nix-channel-init.service)" \
       "$(test -e /nix/var/nix/profiles/per-user/root/channels && echo channels || echo no-channels)"
 
-    # The common module.
-    echo "PROBE gshadow $(stat -c '%a %G' /etc/gshadow)"
-    echo "PROBE sommelierrc $(test -f /etc/sommelierrc && echo present || echo missing)"
-    echo "PROBE user-units $(cd /etc/systemd/user && ls -d garcon.service sommelier@.service sommelier-x@.service 2>&1 | LC_ALL=C sort | tr '\n' ' ')"
-    echo "PROBE xkb $(readlink -f /usr/share/X11)"
-    echo "PROBE sftp-server $(readlink -f /usr/lib/openssh/sftp-server)"
-    echo "PROBE getty $(systemctl show -p LoadState --value console-getty.service)" \
-      "$(systemctl show -p LoadState --value getty@tty1.service)"
+    ${shared.commonModuleProbe}
 
     # dhcpcd runs in the background, with IPv6 off. Incus hands out the
     # lease here, as termina does on ChromeOS.
@@ -98,22 +90,13 @@ let
       # rebuilds from inside the container.
       "system ${shipped.toplevel}$"
       "init current-system$"
-      "hostname ${configuration.config.networking.hostName}$"
       # No host nix-daemon, and no copy of nixpkgs in the image.
       "nix-remote \\[\\]$"
       "channel not-found no-channels$"
-      # tremplin looks for gshadow. sommelier sources sommelierrc.
-      "gshadow 640 shadow$"
-      "sommelierrc present$"
-      "user-units garcon.service sommelier-x@.service sommelier@.service $"
-      # The activation scripts link what the ChromeOS tools expect.
-      "xkb /nix/store/.*/share/X11$"
-      "sftp-server /nix/store/.*/libexec/sftp-server$"
-      # NixOS masks the units it disables.
-      "getty masked masked$"
       "eth0 10\\.0\\.10\\.[0-9]+/24 ipv6=0$"
       "nix-features .*flakes"
     ]
+    ++ shared.commonModuleChecks configuration
     ++ shared.switchChecks shipped.toplevel
     ++ extraChecks;
 
