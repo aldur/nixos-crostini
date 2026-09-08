@@ -54,6 +54,10 @@ let
   # packages of the configuration also build the test itself.
   pkgs = configuration.pkgs;
 
+  # The name maitred creates on the first boot, beside the user of the
+  # configuration.
+  vmcUser = "vmc-user";
+
   # The image, and the probe unit that the initrd drops into it.
   shipped = configuration.config.system.build;
 
@@ -217,9 +221,21 @@ let
         # that sets terminal modes can stop the port for good, so no flow
         # control, and no program output on the port.
         stty -ixon -ixoff -crtscts 2>/dev/null
+        # A command as a user, with the home and the runtime directory of
+        # its session. `as_user` is the user of the configuration, `as_vmc`
+        # the one that maitred creates below, `as_root` root.
+        run_as() {
+          local name=$1 uid=$2
+          shift 2
+          runuser -u $name -- env HOME=/home/$name XDG_RUNTIME_DIR=/run/user/$uid "$@"
+        }
         as_user() {
-          runuser -u $user -- env HOME=/home/$user XDG_RUNTIME_DIR=/run/user/1000 \
-            ${lib.escapeShellArgs (lib.mapAttrsToList (k: v: "${k}=${toString v}") userEnv)} "$@"
+          run_as $user 1000 ${
+            lib.escapeShellArgs (lib.mapAttrsToList (k: v: "${k}=${toString v}") userEnv)
+          } "$@"
+        }
+        as_vmc() {
+          run_as ${vmcUser} 1001 "$@"
         }
         as_root() {
           env HOME=/root XDG_RUNTIME_DIR=/run/user/0 "$@"
@@ -255,12 +271,31 @@ let
     echo "PROBE journald $(grep '^ForwardToConsole=' /etc/systemd/journald.conf)"
     ${shared.commonModuleProbe}
 
+    # `vmc start` asks maitred to set up the user: `useradd` for a new
+    # name, with the shell /bin/bash, or `usermod` for a known one, both
+    # with the groups vmc passes by default, then linger through logind.
+    # The user of the configuration takes the second path.
+    vmc_groups=audio,cdrom,dialout,disk,floppy,kvm,netdev,plugdev,sudo,tss,video
+    vmc_user() {
+      local name=$1 uid=$2 result
+      if getent passwd $name > /dev/null; then
+        /usr/sbin/usermod --append --groups $vmc_groups $name && result=usermod || result=usermod-failed
+      else
+        /usr/sbin/useradd --uid $uid --create-home --shell /bin/bash --groups $vmc_groups $name \
+          && result=useradd || result=useradd-failed
+      fi
+      loginctl enable-linger $name
+      echo "PROBE vmc-user $name $result" \
+        "groups=$(id -Gn $name | tr ' ' '\n' | grep -c -x -F -f <(echo $vmc_groups | tr , '\n'))/11" \
+        "shell=$(getent passwd $name | cut -d : -f 7)"
+    }
+
     # The windows of the guest go through sommelier. Its units come from
     # the image; the binary and its GBM backend come from the tools disk.
     # On ChromeOS, maitred opens the user session and grants the render
     # node.
     chmod 0666 /dev/dri/renderD128 2>/dev/null
-    loginctl enable-linger $user
+    vmc_user $user 1000
     for _ in $(seq 30); do
       as_user systemctl --user is-active --quiet sommelier@0.service 2>/dev/null && break
       sleep 1
@@ -392,6 +427,23 @@ let
     echo "PROBE root-user-x $(x_state as_user)"
     x_status as_root
 
+    # A name the configuration does not declare takes the first path of
+    # maitred. Its login shell is the /bin/bash of the image, and its
+    # session gets the sommelier instances of default.target like the
+    # user of the configuration. The user stays on the disk for the next
+    # boot, which takes the second path for it.
+    vmc_user ${vmcUser} 1001
+    echo "PROBE vmc-login $(runuser -l ${vmcUser} -c 'echo $SHELL $HOME $(id -u)' 2>&1)"
+    systemctl start user@1001.service
+    as_vmc systemctl --user start sommelier-x@default.service || true
+    for _ in $(seq 60); do
+      ready=$(as_vmc systemctl --user is-active $x_units 2>/dev/null | grep -c '^active$')
+      [ "$ready" = 3 ] && break
+      sleep 1
+    done
+    echo "PROBE vmc-x $(x_state as_vmc)"
+    x_status as_vmc
+
     # A switch from inside the guest, as `nixos-rebuild switch` does: it
     # registers the paths of the new generation, sets the system profile,
     # and runs the switch script. The three X instances of each manager
@@ -403,6 +455,12 @@ let
     echo "PROBE switch-template stable-scaling=$(as_user systemctl --user show sommelier-x@0.service -p ExecStart --value | grep -q -- --stable-scaling && echo yes || echo no)"
     echo "PROBE switch-x $(x_state as_user)"
     echo "PROBE switch-root-x $(x_state as_root)"
+    echo "PROBE switch-vmc-x $(x_state as_vmc)"
+
+    # A host has one user. The second one gives its displays back, so the
+    # next boot starts with the displays of the first alone.
+    loginctl disable-linger ${vmcUser}
+    systemctl stop user@1001.service
 
     ${lib.optionalString checkUi ''
       # A window on each display the switch left.
@@ -504,7 +562,7 @@ let
   # check on failed units counts the units of the image only. `booted` is
   # the generation the boot came from.
   checksFor =
-    booted:
+    { booted, first }:
     shared.commonChecks user
     ++ shared.commonModuleChecks configuration
     ++ [
@@ -524,6 +582,14 @@ let
       "hosts 100.115.92.2$"
       "udev 99-local.rules $"
       "notifications 1$"
+      # maitred finds every group vmc names. The user of the configuration
+      # keeps its shell. The other user gets /bin/bash on the first boot,
+      # and is there on the next one, with the same login and instances.
+      "vmc-user ${user} usermod groups=11/11 shell=/run/current-system/sw/bin/.*$"
+      "vmc-user ${vmcUser} ${if first then "useradd" else "usermod"} groups=11/11 shell=/bin/bash$"
+      "vmc-login /bin/bash /home/${vmcUser} 1001$"
+      "vmc-x ${xState}"
+      "switch-vmc-x ${xState}"
       "sommelier active wayland-0$"
       # Only the instances that default.target wants. No `@default`.
       "sommelier-instances sommelier-x@0.service sommelier-x@1.service sommelier@0.service sommelier@1.service $"
@@ -585,7 +651,7 @@ let
     ]
     ++ extraChecks;
 
-  checkProbes = booted: shared.mkCheckProbes pkgs (checksFor booted);
+  checkProbes = boot: shared.mkCheckProbes pkgs (checksFor boot);
 
   initScript =
     if configuration.config.boot.initrd.enable && configuration.config.boot.initrd.systemd.enable then
@@ -692,8 +758,18 @@ pkgs.runCommand name
       $check all-$n.log > probes-$n || status=1
       cat probes-$n
     }
-    boot 1 ${checkProbes shipped.toplevel}
-    boot 2 ${checkProbes nextToplevel}
+    boot 1 ${
+      checkProbes {
+        booted = shipped.toplevel;
+        first = true;
+      }
+    }
+    boot 2 ${
+      checkProbes {
+        booted = nextToplevel;
+        first = false;
+      }
+    }
 
     mkdir -p $out
     cp *.log $out/

@@ -150,10 +150,13 @@
               ln -sf /etc/zoneinfo /usr/share/
             ''
             +
-              # HACK: `vmc start ...` requires /usr/sbin/usermod
+              # maitred sets up the user of `vmc start`: `useradd` for a new
+              # name, with the shell /bin/bash, or `usermod` for a known one.
               ''
-                mkdir -p /usr/sbin/
+                mkdir -p /usr/sbin/ /bin/
+                ln -sf ${pkgs.shadow}/bin/useradd /usr/sbin/useradd
                 ln -sf ${pkgs.shadow}/bin/usermod /usr/sbin/usermod
+                ln -sf ${lib.getExe pkgs.bashInteractive} /bin/bash
               ''
             # Resize the available space to the one provided by Baguette
             + ''
@@ -278,10 +281,12 @@
           };
         };
 
-      # These are the groups expected by default by `vmc start ...`
+      # `vmc start` puts the user in these groups by default, and maitred
+      # rejects the request when one is missing. NixOS has the others.
       users.groups = {
         kvm = { };
         netdev = { };
+        plugdev = { };
         sudo = { };
         tss = { };
       };
