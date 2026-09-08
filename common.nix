@@ -252,10 +252,15 @@ in
             ];
             serviceConfig = {
               Type = "notify";
+              # Do not pin the X display with `--x-display`. Sommelier only pins
+              # a display number above zero. Instance 0 and the `@default`
+              # instance that the host starts let Xwayland pick a free number.
+              # A pinned instance 1 fails when one of them takes display 1
+              # first. Each instance publishes the display it got through
+              # `DISPLAY_VAR`, so no consumer needs a fixed number.
               ExecStart = ''
                 /opt/google/cros-containers/bin/sommelier \
                   -X \
-                  --x-display=%i \
                   --sd-notify="READY=1" \
                   --no-exit-with-child \
                   --x-auth="''${HOME}/.Xauthority" \

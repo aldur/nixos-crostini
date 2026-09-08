@@ -228,8 +228,8 @@ let
     xauthority=/home/$user/.Xauthority
     for display in :0 :1; do
       cookies=$(as_user ${lib.getExe pkgs.xauth} -f $xauthority list $display 2>/dev/null | wc -l)
-      client=$(as_user env DISPLAY=$display XAUTHORITY=$xauthority ${lib.getExe pkgs.xorg.xdpyinfo} >/dev/null 2>&1 && echo ok || echo fail)
-      noauth=$(as_user env DISPLAY=$display XAUTHORITY=/dev/null ${lib.getExe pkgs.xorg.xdpyinfo} >/dev/null 2>&1 && echo accepted || echo refused)
+      client=$(as_user env DISPLAY=$display XAUTHORITY=$xauthority ${lib.getExe pkgs.xdpyinfo} >/dev/null 2>&1 && echo ok || echo fail)
+      noauth=$(as_user env DISPLAY=$display XAUTHORITY=/dev/null ${lib.getExe pkgs.xdpyinfo} >/dev/null 2>&1 && echo accepted || echo refused)
       echo "PROBE x $display cookies=$cookies client=$client noauth=$noauth"
     done
 
@@ -253,16 +253,39 @@ let
       done
     ''}
 
+    # ChromeOS starts a third X instance, `sommelier-x@default`, outside
+    # default.target. Like instance 0, it lets Xwayland pick a display
+    # number. A switch restarts all the instances at once. In the worst
+    # order, the two pickers hold :0 and :1 before instance 1 starts.
+    # Reproduce that order, then a joint restart like the one of a switch.
+    x_units="sommelier-x@0.service sommelier-x@1.service sommelier-x@default.service"
+    x_state() {
+      as_user systemctl --user is-active $x_units 2>/dev/null | tr '\n' ' '
+      as_user systemctl --user show-environment | grep -E '^DISPLAY(_LOW_DENSITY)?=' | LC_ALL=C sort | tr '\n' ' '
+      for var in DISPLAY DISPLAY_LOW_DENSITY; do
+        display=$(as_user systemctl --user show-environment | sed -n "s/^$var=//p")
+        as_user env DISPLAY=$display XAUTHORITY=$xauthority ${lib.getExe pkgs.xdpyinfo} >/dev/null 2>&1 \
+          && echo -n "$var=ok " || echo -n "$var=fail "
+      done
+    }
+    as_user systemctl --user stop $x_units
+    as_user systemctl --user start sommelier-x@default.service sommelier-x@0.service
+    as_user systemctl --user start sommelier-x@1.service || true
+    echo "PROBE x-three-worst $(x_state)"
+    as_user systemctl --user restart $x_units || true
+    echo "PROBE x-three-restart $(x_state)"
+    as_user systemctl --user status 'sommelier-x@*' --no-pager 2>&1 | grep -E 'service|Active|Xwayland|listening' | tail -n 12
+
     ${shared.probeTail extraProbe}
   '';
 
   # Xwayland does not start without the `fixed` and `cursor` fonts. One
   # directory holds both, with the alias file that names `fixed`.
-  xfonts = pkgs.runCommand "baguette-xfonts" { nativeBuildInputs = [ pkgs.xorg.mkfontscale ]; } ''
+  xfonts = pkgs.runCommand "baguette-xfonts" { nativeBuildInputs = [ pkgs.mkfontscale ]; } ''
     mkdir -p $out/misc
-    cp ${pkgs.xorg.fontmiscmisc}/share/fonts/X11/misc/*.pcf.gz \
-      ${pkgs.xorg.fontcursormisc}/share/fonts/X11/misc/*.pcf.gz \
-      ${pkgs.xorg.fontalias}/share/fonts/X11/misc/fonts.alias $out/misc/
+    cp ${pkgs.font-misc-misc}/share/fonts/X11/misc/*.pcf.gz \
+      ${pkgs.font-cursor-misc}/share/fonts/X11/misc/*.pcf.gz \
+      ${pkgs.font-alias}/share/fonts/X11/misc/fonts.alias $out/misc/
     mkfontdir $out/misc
   '';
 
@@ -278,7 +301,7 @@ let
       pkgs.mesa
       pkgs.xwayland
       xfonts
-      pkgs.xorg.xdpyinfo
+      pkgs.xdpyinfo
     ]
     ++ lib.optional checkGtk2 gtk2Window;
   };
@@ -345,8 +368,10 @@ let
       "sommelier-instances sommelier-x@0.service sommelier-x@1.service sommelier@0.service sommelier@1.service $"
       # The user units of the image come up too, sommelier-x among them.
       "user-failed \\[ *\\]"
-      # Each sommelier instance publishes the display it got.
-      "display DISPLAY=:0 DISPLAY_LOW_DENSITY=:1 WAYLAND_DISPLAY=wayland-0 WAYLAND_DISPLAY_LOW_DENSITY=wayland-1 $"
+      # Each sommelier instance publishes the display it got. Xwayland picks
+      # the X display number, so the two X instances get :0 and :1 in the
+      # order they start.
+      "display DISPLAY=:(0 DISPLAY_LOW_DENSITY=:1|1 DISPLAY_LOW_DENSITY=:0) WAYLAND_DISPLAY=wayland-0 WAYLAND_DISPLAY_LOW_DENSITY=wayland-1 $"
       # The cookie of each display is in the file, and Xwayland enforces it.
       "x :0 cookies=1 client=ok noauth=refused$"
       "x :1 cookies=1 client=ok noauth=refused$"
@@ -358,6 +383,12 @@ let
       "gtk2 :1 ok$"
       "after-gui sommelier-x@0.service active restarts=0$"
       "after-gui sommelier-x@1.service active restarts=0$"
+    ]
+    ++ [
+      # Three X instances live together. Instance 1 takes the next free
+      # display after the two pickers, and a client gets in on each.
+      "x-three-worst active active active DISPLAY=:[01] DISPLAY_LOW_DENSITY=:2 DISPLAY=ok DISPLAY_LOW_DENSITY=ok $"
+      "x-three-restart active active active DISPLAY=:[0-9]+ DISPLAY_LOW_DENSITY=:[0-9]+ DISPLAY=ok DISPLAY_LOW_DENSITY=ok $"
     ]
     ++ extraChecks;
 
