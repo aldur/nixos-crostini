@@ -92,6 +92,7 @@ let
       cat /tmp/switch.log
     fi
     echo "PROBE switch $switch init=$(readlink -f /sbin/init)"
+    echo "PROBE switch-warnings $(grep -ci 'warning' /tmp/switch.log)"
 
     ${shared.probeTail extraProbe}
   '';
@@ -120,6 +121,7 @@ let
       "eth0 10\\.0\\.10\\.[0-9]+/24 ipv6=0$"
       "nix-features .*flakes"
       "switch ok init=${shipped.toplevel}/init$"
+      "switch-warnings 0$"
     ]
     ++ extraChecks;
 

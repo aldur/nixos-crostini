@@ -174,6 +174,17 @@ let
           ${./gtk2-window.c} $(pkg-config --libs gtk+-2.0) -o $out/bin/gtk2-window
       '';
 
+  # A second generation, for a switch from inside the guest. Its X11
+  # sommelier template differs from the one of the image, so the switch
+  # restarts every X instance under the live session, as an update of the
+  # module does on ChromeOS.
+  nextStableScaling = !configuration.config.crostini.sommelier.stableScaling;
+  nextGeneration = configuration.extendModules {
+    modules = [ { crostini.sommelier.stableScaling = lib.mkForce nextStableScaling; } ];
+  };
+  nextToplevel = nextGeneration.config.system.build.toplevel;
+  nextClosure = pkgs.closureInfo { rootPaths = [ nextToplevel ]; };
+
   # The probe runs as root using the image's shell and commands, plus the
   # clients supplied on the tools disk.
   probe = pkgs.writeShellScript "probe.sh" ''
@@ -276,6 +287,41 @@ let
     echo "PROBE x-three-restart $(x_state)"
     as_user systemctl --user status 'sommelier-x@*' --no-pager 2>&1 | grep -E 'service|Active|Xwayland|listening' | tail -n 12
 
+    # A switch from inside the guest, as `nixos-rebuild switch` does: it
+    # registers the paths of the new generation, sets the system profile,
+    # and runs the switch script. The three X instances run under the
+    # live session, and the switch restarts them all.
+    nix-store --load-db < $probe/next-registration
+    nix-env -p /nix/var/nix/profiles/system --set ${nextToplevel}
+    if ${nextToplevel}/bin/switch-to-configuration switch > /tmp/switch.log 2>&1; then
+      switch=ok
+    else
+      switch=fail
+    fi
+    cat /tmp/switch.log
+    echo "PROBE switch $switch system=$(readlink -f /run/current-system) init=$(readlink -f /sbin/init)"
+    echo "PROBE switch-warnings $(grep -ci 'warning' /tmp/switch.log)"
+    echo "PROBE switch-failed [$(systemctl list-units --state=failed --no-legend --plain | awk '{ print $1 }' | tr '\n' ' ')]"
+    echo "PROBE switch-user-failed [$(as_user systemctl --user list-units --state=failed --no-legend --plain | awk '{ print $1 }' | tr '\n' ' ')]"
+    echo "PROBE switch-template stable-scaling=$(as_user systemctl --user show sommelier-x@0.service -p ExecStart --value | grep -q -- --stable-scaling && echo yes || echo no)"
+    echo "PROBE switch-x $(x_state)"
+
+    ${lib.optionalString checkGtk2 ''
+      # A window on each display the switch left.
+      for var in DISPLAY DISPLAY_LOW_DENSITY; do
+        display=$(as_user systemctl --user show-environment | sed -n "s/^$var=//p")
+        if as_user env GTK_PROBE_DISPLAY=$display XAUTHORITY=$xauthority G_DEBUG=fatal-warnings \
+          timeout 20 bash -l -c 'export DISPLAY="$GTK_PROBE_DISPLAY"; exec ${gtk2Window}/bin/gtk2-window' \
+          > /tmp/gtk2-switch.log 2>&1; then
+          result=ok
+        else
+          result=fail
+        fi
+        cat /tmp/gtk2-switch.log
+        echo "PROBE switch-gtk2 $var $display $result"
+      done
+    ''}
+
     ${shared.probeTail extraProbe}
   '';
 
@@ -302,6 +348,7 @@ let
       pkgs.xwayland
       xfonts
       pkgs.xdpyinfo
+      nextToplevel
     ]
     ++ lib.optional checkGtk2 gtk2Window;
   };
@@ -345,6 +392,7 @@ let
     ln -s ${pkgs.xwayland}/bin/Xwayland root/bin/Xwayland
 
     install -m 0755 ${probe} root/probe/probe.sh
+    install -m 0444 ${nextClosure}/registration root/probe/next-registration
     ${lib.concatStringsSep "\n" (
       lib.mapAttrsToList (target: source: "install -m 0444 ${source} root/probe/${target}") probeFiles
     )}
@@ -389,6 +437,19 @@ let
       # display after the two pickers, and a client gets in on each.
       "x-three-worst active active active DISPLAY=:[01] DISPLAY_LOW_DENSITY=:2 DISPLAY=ok DISPLAY_LOW_DENSITY=ok $"
       "x-three-restart active active active DISPLAY=:[0-9]+ DISPLAY_LOW_DENSITY=:[0-9]+ DISPLAY=ok DISPLAY_LOW_DENSITY=ok $"
+      # The switch to the next generation ends clean, with no warning in
+      # its output. It links the init script of the new generation, and
+      # the sommelier instances come back with the new template.
+      "switch ok system=${nextToplevel} init=${nextToplevel}/init$"
+      "switch-warnings 0$"
+      "switch-failed \\[ *\\]"
+      "switch-user-failed \\[ *\\]"
+      "switch-template stable-scaling=${if nextStableScaling then "yes" else "no"}$"
+      "switch-x active active active DISPLAY=:[0-9]+ DISPLAY_LOW_DENSITY=:[0-9]+ DISPLAY=ok DISPLAY_LOW_DENSITY=ok $"
+    ]
+    ++ lib.optionals checkGtk2 [
+      "switch-gtk2 DISPLAY :[0-9]+ ok$"
+      "switch-gtk2 DISPLAY_LOW_DENSITY :[0-9]+ ok$"
     ]
     ++ extraChecks;
 
