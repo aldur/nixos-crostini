@@ -176,6 +176,12 @@ in
       '';
     };
 
+    # The LXC module of nixpkgs imports the minimal profile, which turns
+    # off the MIME defaults and the icon directories of the system path.
+    # garcon needs the first, the UI integration the second.
+    xdg.mime.enable = true;
+    xdg.icons.enable = true;
+
     # Taken from https://aur.archlinux.org/packages/cros-container-guest-tools-git
     xdg.mime.defaultApplications = {
       "text/html" = "garcon_host_browser.desktop";

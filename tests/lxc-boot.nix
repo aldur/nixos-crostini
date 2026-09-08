@@ -61,6 +61,12 @@ let
     echo "PROBE channel $(systemctl show -p LoadState --value nix-channel-init.service)" \
       "$(test -e /nix/var/nix/profiles/per-user/root/channels && echo channels || echo no-channels)"
 
+    # The MIME default of a link resolves only when the program of the
+    # desktop entry exists. The Baguette test gets garcon from its tools
+    # disk; this container gets a stand-in at the path of ChromeOS.
+    mkdir -p /opt/google/cros-containers/bin
+    printf '#!/bin/sh\nexit 0\n' > /opt/google/cros-containers/bin/garcon
+    chmod 0755 /opt/google/cros-containers/bin/garcon
     ${shared.commonModuleProbe}
 
     # dhcpcd runs in the background, with IPv6 off. Incus hands out the
