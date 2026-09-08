@@ -18,20 +18,25 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # The hosted ARM64 runner exposes no KVM device, see
+          # actions/runner-images#14062. The ARM64 images build here, but
+          # the boot tests run on x86_64 only.
           - runner: ubuntu-24.04-arm
             arch: arm64
             system: aarch64-linux
+            kvm: false
           - runner: ubuntu-24.04
             arch: x86_64
             system: x86_64-linux
+            kvm: true
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 #v6.0.1
         with:
           persist-credentials: false
-      # crosvm and the NixOS VM test require KVM. The job fails without
-      # it, so a runner that hides the device cannot pass in silence.
+      # crosvm and the NixOS VM test require KVM.
       - name: Enable KVM for the boot tests
+        if: matrix.kvm
         run: |
           uname -m -r
           ls -l /dev/kvm || true
@@ -43,11 +48,12 @@ jobs:
       - run: nix flake check --no-build
       - run: nix build --no-link .#baguette-tarball .#lxc-image-and-metadata
       - name: Boot the Baguette image
+        if: matrix.kvm
         run: nix build -L --out-link boot-test .#checks.${{ matrix.system }}.baguette-boot
       # A failed boot keeps its logs in the job output, through the trap
       # of the test. The link exists on success only.
       - name: Upload boot logs and screenshots
-        if: success()
+        if: matrix.kvm && success()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
         with:
           name: baguette-boot-${{ matrix.arch }}
@@ -56,6 +62,7 @@ jobs:
             boot-test/screenshots/
           if-no-files-found: error
       - name: Boot the LXC image
+        if: matrix.kvm
         run: nix build -L --no-link .#checks.${{ matrix.system }}.lxc-boot
       - run: nix build .#baguette-zimage
 
