@@ -287,6 +287,25 @@ let
     echo "PROBE x-three-restart $(x_state)"
     as_user systemctl --user status 'sommelier-x@*' --no-pager 2>&1 | grep -E 'service|Active|Xwayland|listening' | tail -n 12
 
+    # A root shell on ChromeOS gets a user manager of its own. It runs the
+    # same default.target, so root gets sommelier instances too, as on
+    # Debian. They take X displays from the same pool as the instances of
+    # the user, and a switch reloads the user units of both.
+    root_state() {
+      env XDG_RUNTIME_DIR=/run/user/0 systemctl --user is-active $x_units 2>/dev/null | tr '\n' ' '
+      env XDG_RUNTIME_DIR=/run/user/0 systemctl --user show-environment | grep -E '^DISPLAY(_LOW_DENSITY)?=' | LC_ALL=C sort | tr '\n' ' '
+    }
+    systemctl start user@0.service
+    env XDG_RUNTIME_DIR=/run/user/0 systemctl --user start sommelier-x@default.service || true
+    for _ in $(seq 60); do
+      ready=$(env XDG_RUNTIME_DIR=/run/user/0 systemctl --user is-active $x_units 2>/dev/null | grep -c '^active$')
+      [ "$ready" = 3 ] && break
+      sleep 1
+    done
+    echo "PROBE root-x $(root_state)"
+    echo "PROBE root-user-x $(x_state)"
+    env XDG_RUNTIME_DIR=/run/user/0 systemctl --user status 'sommelier-x@*' --no-pager 2>&1 | grep -E 'service|Active|Xwayland|listening' | tail -n 12
+
     # A switch from inside the guest, as `nixos-rebuild switch` does: it
     # registers the paths of the new generation, sets the system profile,
     # and runs the switch script. The three X instances run under the
@@ -305,6 +324,7 @@ let
     echo "PROBE switch-user-failed [$(as_user systemctl --user list-units --state=failed --no-legend --plain | awk '{ print $1 }' | tr '\n' ' ')]"
     echo "PROBE switch-template stable-scaling=$(as_user systemctl --user show sommelier-x@0.service -p ExecStart --value | grep -q -- --stable-scaling && echo yes || echo no)"
     echo "PROBE switch-x $(x_state)"
+    echo "PROBE switch-root-x $(root_state)"
 
     ${lib.optionalString checkGtk2 ''
       # A window on each display the switch left.
@@ -446,6 +466,11 @@ let
       "switch-user-failed \\[ *\\]"
       "switch-template stable-scaling=${if nextStableScaling then "yes" else "no"}$"
       "switch-x active active active DISPLAY=:[0-9]+ DISPLAY_LOW_DENSITY=:[0-9]+ DISPLAY=ok DISPLAY_LOW_DENSITY=ok $"
+      # The instances of root come up beside the ones of the user, and
+      # both sets survive the switch.
+      "root-x active active active DISPLAY=:[0-9]+ DISPLAY_LOW_DENSITY=:[0-9]+ $"
+      "root-user-x active active active DISPLAY=:[0-9]+ DISPLAY_LOW_DENSITY=:[0-9]+ DISPLAY=ok DISPLAY_LOW_DENSITY=ok $"
+      "switch-root-x active active active DISPLAY=:[0-9]+ DISPLAY_LOW_DENSITY=:[0-9]+ $"
     ]
     ++ lib.optionals checkGtk2 [
       "switch-gtk2 DISPLAY :[0-9]+ ok$"
