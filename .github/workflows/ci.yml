@@ -20,16 +20,21 @@ jobs:
         include:
           - runner: ubuntu-24.04-arm
             arch: arm64
+            system: aarch64-linux
           - runner: ubuntu-24.04
             arch: x86_64
+            system: x86_64-linux
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 #v6.0.1
         with:
           persist-credentials: false
-      - name: Enable KVM for the boot test
-        if: matrix.arch == 'x86_64'
+      # crosvm and the NixOS VM test require KVM. The job fails without
+      # it, so a runner that hides the device cannot pass in silence.
+      - name: Enable KVM for the boot tests
         run: |
+          uname -m -r
+          ls -l /dev/kvm || true
           test -c /dev/kvm
           sudo chmod a+rw /dev/kvm
       - uses: DeterminateSystems/determinate-nix-action@1d699fc25db3f9e079cd2f168ca007a4183389be  # v3.15.1
@@ -37,24 +42,21 @@ jobs:
 
       - run: nix flake check --no-build
       - run: nix build --no-link .#baguette-tarball .#lxc-image-and-metadata
-      # crosvm requires KVM. Keep the ARM64 check available for native
-      # hosts with KVM; the hosted ARM runner only builds the images.
       - name: Boot the Baguette image
-        if: matrix.arch == 'x86_64'
-        run: nix build -L --out-link boot-test .#checks.x86_64-linux.baguette-boot
+        run: nix build -L --out-link boot-test .#checks.${{ matrix.system }}.baguette-boot
+      # A failed boot keeps its logs in the job output, through the trap
+      # of the test. The link exists on success only.
       - name: Upload boot logs and screenshots
-        if: matrix.arch == 'x86_64' && success()
+        if: success()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
         with:
-          name: baguette-boot-x86_64
+          name: baguette-boot-${{ matrix.arch }}
           path: |
             boot-test/*.log
             boot-test/screenshots/
           if-no-files-found: error
-      # Incus runs in a NixOS VM test, which also requires KVM.
       - name: Boot the LXC image
-        if: matrix.arch == 'x86_64'
-        run: nix build -L --no-link .#checks.x86_64-linux.lxc-boot
+        run: nix build -L --no-link .#checks.${{ matrix.system }}.lxc-boot
       - run: nix build .#baguette-zimage
 
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
