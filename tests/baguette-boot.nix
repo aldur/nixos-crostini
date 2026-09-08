@@ -151,6 +151,10 @@ let
   # nixpkgs marks sommelier broken: its test suite fails. The program
   # builds, and the image has all its libraries at the same store paths.
   sommelier = pkgs.sommelier.overrideAttrs (old: {
+    # Sommelier 126 submits X11 buffers before the initial xdg configure.
+    # Weston rejects that protocol violation. This patch belongs to the
+    # test's substitute tools disk; ChromeOS supplies the shipped binary.
+    patches = (old.patches or [ ]) ++ [ ./sommelier-initial-configure.patch ];
     doCheck = false;
     buildInputs = old.buildInputs ++ [ pkgs.gtest ];
     meta = old.meta // {
@@ -158,8 +162,24 @@ let
     };
   });
 
-  # The probe runs as root in the guest. It has what the image has, and no
-  # more. The shebang is the /bin/sh of NixOS.
+  checkGtk2 = configuration.config.crostini.ui.enable;
+  gtk2Window =
+    pkgs.runCommand "baguette-gtk2-window"
+      {
+        nativeBuildInputs = [
+          pkgs.stdenv.cc
+          pkgs.pkg-config
+        ];
+        buildInputs = [ pkgs.gtk2 ];
+      }
+      ''
+        mkdir -p $out/bin
+        cc -Wall -Wno-deprecated-declarations $(pkg-config --cflags gtk+-2.0) \
+          ${./gtk2-window.c} $(pkg-config --libs gtk+-2.0) -o $out/bin/gtk2-window
+      '';
+
+  # The probe runs as root using the image's shell and commands, plus the
+  # clients supplied on the tools disk. The shebang is the /bin/sh of NixOS.
   probe = pkgs.writeShellScript "probe.sh" ''
     export PATH=/run/current-system/sw/bin:/run/wrappers/bin
     probe=/opt/google/cros-containers/probe
@@ -221,6 +241,26 @@ let
       echo "PROBE x $display cookies=$cookies client=$client noauth=$noauth"
     done
 
+    ${lib.optionalString checkGtk2 ''
+      # Use the login environment and theme of the shipped image. The tools
+      # disk supplies the application, but no theme or theme engine.
+      for display in :0 :1; do
+        if as_user env GTK_PROBE_DISPLAY=$display XAUTHORITY=$xauthority G_DEBUG=fatal-warnings \
+          timeout 20 bash -l -c 'export DISPLAY="$GTK_PROBE_DISPLAY"; exec ${gtk2Window}/bin/gtk2-window' \
+          > /tmp/gtk2-window.log 2>&1; then
+          result=ok
+        else
+          result=fail
+        fi
+        cat /tmp/gtk2-window.log
+        echo "PROBE gtk2 $display $result"
+      done
+      for unit in sommelier-x@0.service sommelier-x@1.service; do
+        echo "PROBE after-gui $unit $(as_user systemctl --user is-active $unit) restarts=$(as_user systemctl --user show $unit -p NRestarts --value)"
+        journalctl --no-pager -o cat _SYSTEMD_USER_UNIT=$unit | tail -n 10
+      done
+    ''}
+
     ${extraProbe}
 
     echo "PROBE DONE"
@@ -240,8 +280,8 @@ let
   # sommelier and Xwayland from nixpkgs find most of theirs in the store
   # of the image, at the same paths. The tools disk carries the rest, and
   # the overlay unit above puts it under /nix/store. Mesa is the GBM
-  # backend of sommelier, which the image does not ship. xdpyinfo is the
-  # X client of the probe.
+  # backend of sommelier, which the image does not ship. xdpyinfo and the
+  # GTK2 probe are test clients; the theme engine must come from the image.
   toolsClosure = pkgs.closureInfo {
     rootPaths = [
       sommelier
@@ -249,7 +289,8 @@ let
       pkgs.xwayland
       xfonts
       pkgs.xorg.xdpyinfo
-    ];
+    ]
+    ++ lib.optional checkGtk2 gtk2Window;
   };
   imageClosure = pkgs.closureInfo { rootPaths = [ shipped.toplevel ]; };
 
@@ -324,6 +365,12 @@ let
     # Older nixpkgs uses extraConfig; both spellings enable forwarding.
     "journald ForwardToConsole=\\(true\\|yes\\)$"
   ]
+  ++ lib.optionals checkGtk2 [
+    "gtk2 :0 ok$"
+    "gtk2 :1 ok$"
+    "after-gui sommelier-x@0.service active restarts=0$"
+    "after-gui sommelier-x@1.service active restarts=0$"
+  ]
   ++ extraChecks;
 in
 pkgs.runCommand name
@@ -345,10 +392,11 @@ pkgs.runCommand name
 
     # The logs go to files. Their lines end in CR and carry colors. Print
     # them clean at the end, also on failure.
-    touch console.log probe.log weston.log
+    touch console.log probe.log weston.log capture.log
     show_logs() {
+      ${lib.optionalString checkGtk2 "kill $capture 2>/dev/null || true"}
       kill $weston 2>/dev/null
-      for f in console.log probe.log weston.log; do
+      for f in console.log probe.log weston.log capture.log; do
         echo "===== $f"
         sed 's/\r$//; s/\x1b\[[0-9;?]*[a-zA-Z]//g' $f
         echo "===== end of $f"
@@ -358,16 +406,28 @@ pkgs.runCommand name
 
     # The compositor of the host. crosvm proxies its socket into the
     # guest, where sommelier connects to it through virtio-gpu.
+    # Let clients choose their initial size. The kiosk shell forces a
+    # fullscreen resize before the first frame, which deadlocks Sommelier
+    # 126's configure acknowledgement against Xwayland's frame callback.
     export XDG_RUNTIME_DIR=$PWD/run
+    export WAYLAND_DISPLAY=wayland-host
+    export XDG_CACHE_HOME=$PWD/cache
+    export FONTCONFIG_FILE=${pkgs.makeFontsConf { fontDirectories = [ pkgs.dejavu_fonts ]; }}
+    mkdir -p $XDG_CACHE_HOME
     mkdir -m 0700 $XDG_RUNTIME_DIR
     weston --backend=headless --socket=wayland-host --idle-time=0 \
-      --shell=kiosk --no-config --log=weston.log &
+      --shell=desktop --renderer=pixman --debug --no-config --log=weston.log &
     weston=$!
     for _ in $(seq 60); do
       [ -S $XDG_RUNTIME_DIR/wayland-host ] && break
       sleep 0.5
     done
     [ -S $XDG_RUNTIME_DIR/wayland-host ] || { echo "FAIL: weston did not start"; exit 1; }
+
+    ${lib.optionalString checkGtk2 ''
+      timeout ${toString timeout} bash ${./capture-windows.sh} > capture.log 2>&1 &
+      capture=$!
+    ''}
 
     # ttyS0 is the console, ttyS1 the probe output. No getty on ttyS0: it
     # would take the console away. The GPU gives the guest a render node,
@@ -388,8 +448,20 @@ pkgs.runCommand name
       status=1
     }
 
+    ${lib.optionalString checkGtk2 ''
+      # The VM has stopped, so a missing screenshot cannot arrive later.
+      if [ ! -s screenshots/gtk2-0.png ] || [ ! -s screenshots/gtk2-1.png ]; then
+        echo "FAIL: GTK2 windows were not captured on both displays"
+        kill $capture 2>/dev/null || true
+        status=1
+      fi
+      wait $capture || status=1
+    ''}
     mkdir -p $out
-    cp console.log probe.log crosvm.log $out/
+    cp console.log probe.log crosvm.log weston.log capture.log $out/
+    ${lib.optionalString checkGtk2 ''
+      if [ -d screenshots ]; then cp -r screenshots $out/; fi
+    ''}
 
     # systemd sends a terminal query to the tty before the first line.
     sed 's/\r$//' probe.log | grep -o 'PROBE .*' > probes || true

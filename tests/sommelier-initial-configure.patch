@@ -1,0 +1,135 @@
+Sommelier 126 forwards Xwayland's first buffer before acknowledging the
+initial xdg_surface.configure. Weston rejects it with
+"xdg_surface has never been configured".
+
+Defer X11 buffer attachment and commits until the configure is acknowledged,
+and send the initial bufferless commit after assigning the xdg role.
+Applied only to the VM test's Sommelier, never to the shipped image.
+
+--- a/sommelier.h
++++ b/sommelier.h
+@@ -152,6 +152,8 @@
+   struct wl_surface* proxy;
+   struct wp_viewport* viewport;
+   struct wl_buffer* proxy_buffer;
++  struct wl_buffer* pending_buffer = nullptr;
++  bool pending_buffer_attach = false;
+ 
+   // Window content size from XWayland: wl_surface.attach(passing a wl_buffer of
+   // size w', h').
+@@ -647,6 +649,8 @@
+                               xcb_client_message_event_t* event);
+ void sl_handle_focus_in(struct sl_context* ctx, xcb_focus_in_event_t* event);
+ 
++void sl_host_surface_attach_pending_buffer(struct sl_host_surface* host);
++
+ void sl_host_surface_commit(struct wl_client* client,
+                             struct wl_resource* resource);
+ 
+--- a/sommelier-window.h
++++ b/sommelier-window.h
+@@ -158,6 +158,7 @@
+   struct sl_config coalesced_next_config;
+ 
+   struct xdg_surface* xdg_surface = nullptr;
++  bool xdg_configured = false;
+   struct xdg_toplevel* xdg_toplevel = nullptr;
+   struct xdg_popup* xdg_popup = nullptr;
+   struct zaura_surface* aura_surface = nullptr;
+--- a/sommelier-window.cc
++++ b/sommelier-window.cc
+@@ -194,6 +194,9 @@
+   if (window->xdg_surface) {
+     xdg_surface_ack_configure(window->xdg_surface,
+                               window->pending_config.serial);
++    window->xdg_configured = true;
++    if (host_surface)
++      sl_host_surface_attach_pending_buffer(host_surface);
+   }
+   window->pending_config.serial = 0;
+ 
+@@ -1091,6 +1094,7 @@
+     if (window->xdg_surface) {
+       xdg_surface_destroy(window->xdg_surface);
+       window->xdg_surface = nullptr;
++      window->xdg_configured = false;
+     }
+     window->realized = 0;
+     return;
+@@ -1172,6 +1176,7 @@
+     }
+   }
+ 
++  bool initial_commit = !window->xdg_surface;
+   if (!window->xdg_surface) {
+     window->xdg_surface = xdg_wm_base_get_xdg_surface(ctx->xdg_shell->internal,
+                                                       host_surface->proxy);
+@@ -1299,11 +1304,18 @@
+                              diffy);
+   }
+ 
++  // xdg-shell requires an initial commit without a buffer. Further buffer
++  // commits must wait for the configure/ack handshake, even if Xwayland has
++  // already drawn the window.
++  if (initial_commit) {
++    wl_surface_commit(host_surface->proxy);
++  } else if (window->xdg_configured) {
+ #ifdef COMMIT_LOOP_FIX
+-  sl_commit(window, host_surface);
++    sl_commit(window, host_surface);
+ #else
+-  wl_surface_commit(host_surface->proxy);
++    wl_surface_commit(host_surface->proxy);
+ #endif
++  }
+ 
+   if (host_surface->contents_width && host_surface->contents_height)
+     window->realized = 1;
+--- a/compositor/sommelier-compositor.cc
++++ b/compositor/sommelier-compositor.cc
+@@ -100,6 +100,14 @@
+   TRACE_EVENT("surface", "sl_host_surface_destroy", "resource_id",
+               try_wl_resource_get_id(resource));
+   wl_resource_destroy(resource);
++}
++
++void sl_host_surface_attach_pending_buffer(struct sl_host_surface* host) {
++  if (!host->pending_buffer_attach)
++    return;
++  wl_surface_attach(host->proxy, host->pending_buffer,
++                    host->contents_x_offset, host->contents_y_offset);
++  host->pending_buffer_attach = false;
+ }
+ 
+ static void sl_host_surface_attach(struct wl_client* client,
+@@ -359,12 +367,14 @@
+       host_buffer->sync_point->sync(host->ctx, host_buffer->sync_point);
+   }
+ 
+-  if (host->current_buffer) {
+-    assert(host->current_buffer->internal);
+-    wl_surface_attach(host->proxy, host->current_buffer->internal, x, y);
+-  } else {
+-    wl_surface_attach(host->proxy, buffer_proxy, x, y);
+-  }
++  // Xwayland can attach before its surface is paired with an X11 window.
++  // Keep that buffer pending until the initial xdg configure is acknowledged.
++  host->pending_buffer = host->current_buffer
++                             ? host->current_buffer->internal : buffer_proxy;
++  host->pending_buffer_attach = true;
++  if (!host->ctx->xwayland || host->has_role ||
++      (window && window->xdg_configured))
++    sl_host_surface_attach_pending_buffer(host);
+ 
+   wl_list_for_each(window, &host->ctx->windows, link) {
+     if (window->host_surface_id == try_wl_resource_get_id(resource)) {
+@@ -795,7 +805,7 @@
+     struct sl_window* window;
+     wl_list_for_each(window, &host->ctx->windows, link) {
+       if (window->host_surface_id == try_wl_resource_get_id(resource)) {
+-        if (window->xdg_surface) {
++        if (window->xdg_surface && window->xdg_configured) {
+           wl_surface_commit(host->proxy);
+           if (host->contents_width && host->contents_height)
+             window->realized = 1;
+

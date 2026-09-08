@@ -42,12 +42,14 @@ jobs:
       - name: Boot the Baguette image
         if: matrix.arch == 'x86_64'
         run: nix build -L --out-link boot-test .#checks.x86_64-linux.baguette-boot
-      - name: Upload boot logs
+      - name: Upload boot logs and screenshots
         if: matrix.arch == 'x86_64' && success()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
         with:
           name: baguette-boot-x86_64
-          path: boot-test/*.log
+          path: |
+            boot-test/*.log
+            boot-test/screenshots/
           if-no-files-found: error
       - run: nix build .#baguette-zimage
 
