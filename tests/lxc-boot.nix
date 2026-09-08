@@ -85,14 +85,7 @@ let
     # `nixos-rebuild` ends in this script. From inside the container, it
     # runs the activation scripts and links /sbin/init.
     rm -f /sbin/init
-    if /run/current-system/bin/switch-to-configuration switch > /tmp/switch.log 2>&1; then
-      switch=ok
-    else
-      switch=fail
-      cat /tmp/switch.log
-    fi
-    echo "PROBE switch $switch init=$(readlink -f /sbin/init)"
-    echo "PROBE switch-warnings $(grep -ci 'warning' /tmp/switch.log)"
+    ${shared.switchProbe shipped.toplevel}
 
     ${shared.probeTail extraProbe}
   '';
@@ -120,9 +113,8 @@ let
       "getty masked masked$"
       "eth0 10\\.0\\.10\\.[0-9]+/24 ipv6=0$"
       "nix-features .*flakes"
-      "switch ok init=${shipped.toplevel}/init$"
-      "switch-warnings 0$"
     ]
+    ++ shared.switchChecks shipped.toplevel
     ++ extraChecks;
 
   checkProbes = shared.mkCheckProbes pkgs checks;

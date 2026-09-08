@@ -158,20 +158,36 @@ let
     };
   });
 
-  checkGtk2 = configuration.config.crostini.ui.enable;
-  gtk2Window =
-    pkgs.runCommand "baguette-gtk2-window"
+  checkUi = configuration.config.crostini.ui.enable;
+
+  # ChromeOS mounts the CrosAdapta theme with the tools. The tools disk of
+  # the test carries the same theme, so GTK 3 finds it through the link of
+  # the UI integration.
+  crosAdapta = pkgs.fetchgit {
+    url = "https://chromium.googlesource.com/chromiumos/third_party/cros-adapta";
+    rev = "fe8ed49919cd9f6ce0efe86813a388d90e7314b6";
+    hash = "sha256-cfWlo4lYVTXp4QcI3Ylw2Tj16//Hds156tJqBC2QF1c=";
+  };
+
+  # The GTK 2 and GTK 3 clients of the probe, one binary each.
+  gtkWindows =
+    pkgs.runCommand "baguette-gtk-windows"
       {
         nativeBuildInputs = [
           pkgs.stdenv.cc
           pkgs.pkg-config
         ];
-        buildInputs = [ pkgs.gtk2 ];
+        buildInputs = [
+          pkgs.gtk2
+          pkgs.gtk3
+        ];
       }
       ''
         mkdir -p $out/bin
         cc -Wall -Wno-deprecated-declarations $(pkg-config --cflags gtk+-2.0) \
           ${./gtk2-window.c} $(pkg-config --libs gtk+-2.0) -o $out/bin/gtk2-window
+        cc -Wall $(pkg-config --cflags gtk+-3.0) \
+          ${./gtk3-window.c} $(pkg-config --libs gtk+-3.0) -o $out/bin/gtk3-window
       '';
 
   # A second generation, for a switch from inside the guest. Its X11
@@ -199,6 +215,18 @@ let
         as_user() {
           runuser -u $user -- env HOME=/home/$user XDG_RUNTIME_DIR=/run/user/1000 \
             ${lib.escapeShellArgs (lib.mapAttrsToList (k: v: "${k}=${toString v}") userEnv)} "$@"
+        }
+        as_root() {
+          env HOME=/root XDG_RUNTIME_DIR=/run/user/0 "$@"
+        }
+        # The variables a user manager publishes: `manager_env as_user
+        # PATTERN` lists the ones a pattern matches, `manager_var as_user
+        # NAME` gives the value of one.
+        manager_env() {
+          $1 systemctl --user show-environment | grep -E "$2" | LC_ALL=C sort | tr '\n' ' '
+        }
+        manager_var() {
+          $1 systemctl --user show-environment | sed -n "s/^$2=//p"
         }
       '';
     }}
@@ -234,8 +262,9 @@ let
       sleep 1
     done
     as_user systemctl --user status 'sommelier-x@*' --no-pager 2>&1 | grep -E 'service|Active|sommelier|Xwayland|xauth' | tail -n 12
-    echo "PROBE user-failed [$(as_user systemctl --user list-units --state=failed --no-legend --plain | awk '{ print $1 }' | tr '\n' ' ')]"
-    echo "PROBE display $(as_user systemctl --user show-environment | grep -E '^(WAYLAND_)?DISPLAY(_LOW_DENSITY)?=' | LC_ALL=C sort | tr '\n' ' ')"
+    echo "PROBE user-failed [$(failed_units as_user systemctl --user)]"
+    echo "PROBE display $(manager_env as_user '^(WAYLAND_)?DISPLAY(_LOW_DENSITY)?=')"
+
     # A terminal of ChromeOS opens a login shell with a bare environment.
     # The profile scripts of the image then export the session variables,
     # the displays of sommelier, and the theme variables, in that order:
@@ -245,116 +274,119 @@ let
       runuser -u $user -- env -i HOME=/home/$user TERM=xterm bash -l -c \
         'for v in "$@"; do eval "echo $v=\$$v"; done' bash "$@" 2>&1 | LC_ALL=C sort | tr '\n' ' '
     }
-    manager=$(as_user systemctl --user show-environment | grep -E '^(WAYLAND_)?DISPLAY(_LOW_DENSITY)?=|^XCURSOR_SIZE(_LOW_DENSITY)?=' | LC_ALL=C sort | tr '\n' ' ')
+    manager=$(manager_env as_user '^(WAYLAND_)?DISPLAY(_LOW_DENSITY)?=|^XCURSOR_SIZE(_LOW_DENSITY)?=')
     shell=$(login_env DISPLAY DISPLAY_LOW_DENSITY WAYLAND_DISPLAY WAYLAND_DISPLAY_LOW_DENSITY XCURSOR_SIZE XCURSOR_SIZE_LOW_DENSITY)
     echo "PROBE login-sommelier $([ "$manager" = "$shell" ] && echo match || echo differ) $shell"
     echo "PROBE login-session $(login_env DBUS_SESSION_BUS_ADDRESS USER XDG_RUNTIME_DIR XDG_SESSION_TYPE)"
     echo "PROBE login-theme $(login_env GTK2_RC_FILES GTK_DATA_PREFIX XCURSOR_THEME)"
 
+    # An X client finds the cookie file of its user through HOME.
     xauthority=/home/$user/.Xauthority
     for display in :0 :1; do
       cookies=$(as_user ${lib.getExe pkgs.xauth} -f $xauthority list $display 2>/dev/null | wc -l)
-      client=$(as_user env DISPLAY=$display XAUTHORITY=$xauthority ${lib.getExe pkgs.xdpyinfo} >/dev/null 2>&1 && echo ok || echo fail)
+      client=$(as_user env DISPLAY=$display ${lib.getExe pkgs.xdpyinfo} >/dev/null 2>&1 && echo ok || echo fail)
       noauth=$(as_user env DISPLAY=$display XAUTHORITY=/dev/null ${lib.getExe pkgs.xdpyinfo} >/dev/null 2>&1 && echo accepted || echo refused)
       echo "PROBE x $display cookies=$cookies client=$client noauth=$noauth"
     done
 
-    ${lib.optionalString checkGtk2 ''
-      # Use the login environment and theme of the shipped image. The tools
-      # disk supplies the application, but no theme or theme engine.
-      for display in :0 :1; do
-        if as_user env GTK_PROBE_DISPLAY=$display XAUTHORITY=$xauthority G_DEBUG=fatal-warnings \
-          timeout 20 bash -l -c 'export DISPLAY="$GTK_PROBE_DISPLAY"; exec ${gtk2Window}/bin/gtk2-window' \
-          > /tmp/gtk2-window.log 2>&1; then
+    ${lib.optionalString checkUi ''
+      # A window on the display a variable names, from a login shell with
+      # the theme of the image, and with fatal warnings. The tools disk
+      # supplies the client, but no theme or theme engine. The name of the
+      # probe line ends in the GTK version, and the window carries the
+      # name of the variable, so the capture on the host tells the
+      # instances apart.
+      gtk_window() {
+        local probe=$1 var=$2 toolkit=''${1##*gtk} display export_display result
+        display=$(manager_var as_user $var)
+        case $var in
+          WAYLAND_*) export_display='export GDK_BACKEND=wayland WAYLAND_DISPLAY="$GTK_PROBE_DISPLAY"' ;;
+          *) export_display='export DISPLAY="$GTK_PROBE_DISPLAY"' ;;
+        esac
+        if as_user env GTK_PROBE_DISPLAY=$display GTK_PROBE_LABEL=$var G_DEBUG=fatal-warnings \
+          timeout 20 bash -l -c "$export_display; exec ${gtkWindows}/bin/gtk$toolkit-window" \
+          > /tmp/gtk-window.log 2>&1; then
           result=ok
         else
           result=fail
         fi
-        cat /tmp/gtk2-window.log
-        echo "PROBE gtk2 $display $result"
-      done
-      for unit in sommelier-x@0.service sommelier-x@1.service; do
+        cat /tmp/gtk-window.log
+        echo "PROBE $probe $var $display $result"
+      }
+      # The X path with GTK 2, and the Wayland path with GTK 3 on the
+      # socket of each parent sommelier, with the theme of the host mount.
+      gtk_window gtk2 DISPLAY
+      gtk_window gtk2 DISPLAY_LOW_DENSITY
+      gtk_window gtk3 WAYLAND_DISPLAY
+      gtk_window gtk3 WAYLAND_DISPLAY_LOW_DENSITY
+      for unit in sommelier@0.service sommelier@1.service sommelier-x@0.service sommelier-x@1.service; do
         echo "PROBE after-gui $unit $(as_user systemctl --user is-active $unit) restarts=$(as_user systemctl --user show $unit -p NRestarts --value)"
         journalctl --no-pager -o cat _SYSTEMD_USER_UNIT=$unit | tail -n 10
       done
     ''}
+
+    # The X instances of a manager: their states, the displays the manager
+    # publishes, and a client on each. `x_state as_user` for the user,
+    # `x_state as_root` for root.
+    x_units="sommelier-x@0.service sommelier-x@1.service sommelier-x@default.service"
+    x_state() {
+      local var display
+      $1 systemctl --user is-active $x_units 2>/dev/null | tr '\n' ' '
+      manager_env $1 '^DISPLAY(_LOW_DENSITY)?='
+      for var in DISPLAY DISPLAY_LOW_DENSITY; do
+        display=$(manager_var $1 $var)
+        $1 env DISPLAY=$display ${lib.getExe pkgs.xdpyinfo} >/dev/null 2>&1 \
+          && echo -n "$var=ok " || echo -n "$var=fail "
+      done
+    }
+    x_status() {
+      $1 systemctl --user status 'sommelier-x@*' --no-pager 2>&1 | grep -E 'service|Active|Xwayland|listening' | tail -n 12
+    }
 
     # ChromeOS starts a third X instance, `sommelier-x@default`, outside
     # default.target. Like instance 0, it lets Xwayland pick a display
     # number. A switch restarts all the instances at once. In the worst
     # order, the two pickers hold :0 and :1 before instance 1 starts.
     # Reproduce that order, then a joint restart like the one of a switch.
-    x_units="sommelier-x@0.service sommelier-x@1.service sommelier-x@default.service"
-    x_state() {
-      as_user systemctl --user is-active $x_units 2>/dev/null | tr '\n' ' '
-      as_user systemctl --user show-environment | grep -E '^DISPLAY(_LOW_DENSITY)?=' | LC_ALL=C sort | tr '\n' ' '
-      for var in DISPLAY DISPLAY_LOW_DENSITY; do
-        display=$(as_user systemctl --user show-environment | sed -n "s/^$var=//p")
-        as_user env DISPLAY=$display XAUTHORITY=$xauthority ${lib.getExe pkgs.xdpyinfo} >/dev/null 2>&1 \
-          && echo -n "$var=ok " || echo -n "$var=fail "
-      done
-    }
     as_user systemctl --user stop $x_units
     as_user systemctl --user start sommelier-x@default.service sommelier-x@0.service
     as_user systemctl --user start sommelier-x@1.service || true
-    echo "PROBE x-three-worst $(x_state)"
+    echo "PROBE x-three-worst $(x_state as_user)"
     as_user systemctl --user restart $x_units || true
-    echo "PROBE x-three-restart $(x_state)"
-    as_user systemctl --user status 'sommelier-x@*' --no-pager 2>&1 | grep -E 'service|Active|Xwayland|listening' | tail -n 12
+    echo "PROBE x-three-restart $(x_state as_user)"
+    x_status as_user
 
     # A root shell on ChromeOS gets a user manager of its own. It runs the
     # same default.target, so root gets sommelier instances too, as on
     # Debian. They take X displays from the same pool as the instances of
     # the user, and a switch reloads the user units of both.
-    root_state() {
-      env XDG_RUNTIME_DIR=/run/user/0 systemctl --user is-active $x_units 2>/dev/null | tr '\n' ' '
-      env XDG_RUNTIME_DIR=/run/user/0 systemctl --user show-environment | grep -E '^DISPLAY(_LOW_DENSITY)?=' | LC_ALL=C sort | tr '\n' ' '
-    }
     systemctl start user@0.service
-    env XDG_RUNTIME_DIR=/run/user/0 systemctl --user start sommelier-x@default.service || true
+    as_root systemctl --user start sommelier-x@default.service || true
     for _ in $(seq 60); do
-      ready=$(env XDG_RUNTIME_DIR=/run/user/0 systemctl --user is-active $x_units 2>/dev/null | grep -c '^active$')
+      ready=$(as_root systemctl --user is-active $x_units 2>/dev/null | grep -c '^active$')
       [ "$ready" = 3 ] && break
       sleep 1
     done
-    echo "PROBE root-x $(root_state)"
-    echo "PROBE root-user-x $(x_state)"
-    env XDG_RUNTIME_DIR=/run/user/0 systemctl --user status 'sommelier-x@*' --no-pager 2>&1 | grep -E 'service|Active|Xwayland|listening' | tail -n 12
+    echo "PROBE root-x $(x_state as_root)"
+    echo "PROBE root-user-x $(x_state as_user)"
+    x_status as_root
 
     # A switch from inside the guest, as `nixos-rebuild switch` does: it
     # registers the paths of the new generation, sets the system profile,
-    # and runs the switch script. The three X instances run under the
-    # live session, and the switch restarts them all.
+    # and runs the switch script. The three X instances of each manager
+    # run under the live session, and the switch restarts them all.
     nix-store --load-db < $probe/next-registration
     nix-env -p /nix/var/nix/profiles/system --set ${nextToplevel}
-    if ${nextToplevel}/bin/switch-to-configuration switch > /tmp/switch.log 2>&1; then
-      switch=ok
-    else
-      switch=fail
-    fi
-    cat /tmp/switch.log
-    echo "PROBE switch $switch system=$(readlink -f /run/current-system) init=$(readlink -f /sbin/init)"
-    echo "PROBE switch-warnings $(grep -ci 'warning' /tmp/switch.log)"
-    echo "PROBE switch-failed [$(systemctl list-units --state=failed --no-legend --plain | awk '{ print $1 }' | tr '\n' ' ')]"
-    echo "PROBE switch-user-failed [$(as_user systemctl --user list-units --state=failed --no-legend --plain | awk '{ print $1 }' | tr '\n' ' ')]"
+    ${shared.switchProbe nextToplevel}
+    echo "PROBE switch-user-failed [$(failed_units as_user systemctl --user)]"
     echo "PROBE switch-template stable-scaling=$(as_user systemctl --user show sommelier-x@0.service -p ExecStart --value | grep -q -- --stable-scaling && echo yes || echo no)"
-    echo "PROBE switch-x $(x_state)"
-    echo "PROBE switch-root-x $(root_state)"
+    echo "PROBE switch-x $(x_state as_user)"
+    echo "PROBE switch-root-x $(x_state as_root)"
 
-    ${lib.optionalString checkGtk2 ''
+    ${lib.optionalString checkUi ''
       # A window on each display the switch left.
-      for var in DISPLAY DISPLAY_LOW_DENSITY; do
-        display=$(as_user systemctl --user show-environment | sed -n "s/^$var=//p")
-        if as_user env GTK_PROBE_DISPLAY=$display XAUTHORITY=$xauthority G_DEBUG=fatal-warnings \
-          timeout 20 bash -l -c 'export DISPLAY="$GTK_PROBE_DISPLAY"; exec ${gtk2Window}/bin/gtk2-window' \
-          > /tmp/gtk2-switch.log 2>&1; then
-          result=ok
-        else
-          result=fail
-        fi
-        cat /tmp/gtk2-switch.log
-        echo "PROBE switch-gtk2 $var $display $result"
-      done
+      gtk_window switch-gtk2 DISPLAY
+      gtk_window switch-gtk2 DISPLAY_LOW_DENSITY
     ''}
 
     ${shared.probeTail extraProbe}
@@ -385,7 +417,7 @@ let
       pkgs.xdpyinfo
       nextToplevel
     ]
-    ++ lib.optional checkGtk2 gtk2Window;
+    ++ lib.optional checkUi gtkWindows;
   };
   imageClosure = pkgs.closureInfo { rootPaths = [ shipped.toplevel ]; };
 
@@ -411,13 +443,18 @@ let
     # host is a virtio-gpu context, not the virtio-wl device of ChromeOS.
     # Mesa of nixpkgs looks for its backends and drivers under
     # /run/opengl-driver, which the image does not have.
+    #
+    # A parent sommelier spawns a child for each Wayland client, through
+    # its own argv[0]. The wrapper keeps its path there, so the children
+    # get the channel flag too.
     cat > root/bin/sommelier <<EOF
-    #!/bin/sh
+    #!/run/current-system/sw/bin/bash
     export GBM_BACKENDS_PATH=${pkgs.mesa}/lib/gbm
     export LIBGL_DRIVERS_PATH=${pkgs.mesa}/lib/dri
     export SOMMELIER_XWAYLAND_GL_DRIVER_PATH=${pkgs.mesa}/lib/dri
     export SOMMELIER_XFONT_PATH=${xfonts}/misc
-    exec /opt/google/cros-containers/bin/sommelier-bin --virtgpu-channel "\$@"
+    exec -a /opt/google/cros-containers/bin/sommelier \
+      /opt/google/cros-containers/bin/sommelier-bin --virtgpu-channel "\$@"
     EOF
     chmod 0755 root/bin/*
 
@@ -425,6 +462,8 @@ let
     # of ChromeOS.
     ln -s ${sommelier}/bin/sommelier root/bin/sommelier-bin
     ln -s ${pkgs.xwayland}/bin/Xwayland root/bin/Xwayland
+
+    ${lib.optionalString checkUi "cp -r ${crosAdapta} root/cros-adapta"}
 
     install -m 0755 ${probe} root/probe/probe.sh
     install -m 0444 ${nextClosure}/registration root/probe/next-registration
@@ -435,6 +474,10 @@ let
     truncate -s 2G $out
     mkfs.btrfs -q -L cros-vm-tools -r root --shrink $out
   '';
+
+  # The three X instances of a manager: active, with the displays the
+  # manager publishes, and a client on each.
+  xState = "active active active DISPLAY=:[0-9]+ DISPLAY_LOW_DENSITY=:[0-9]+ DISPLAY=ok DISPLAY_LOW_DENSITY=ok $";
 
   # The stand-ins keep the units of the image from failing, so the shared
   # check on failed units counts the units of the image only.
@@ -464,36 +507,43 @@ let
       "x :1 cookies=1 client=ok noauth=refused$"
       # Older nixpkgs uses extraConfig; both spellings enable forwarding.
       "journald ForwardToConsole=(true|yes)$"
-    ]
-    ++ lib.optionals checkGtk2 [
-      # The theme variables of the UI integration reach the login shell.
-      "login-theme GTK2_RC_FILES=/etc/gtk-2.0/gtkrc GTK_DATA_PREFIX=/run/current-system/sw XCURSOR_THEME=Adwaita $"
-      "gtk2 :0 ok$"
-      "gtk2 :1 ok$"
-      "after-gui sommelier-x@0.service active restarts=0$"
-      "after-gui sommelier-x@1.service active restarts=0$"
-    ]
-    ++ [
       # Three X instances live together. Instance 1 takes the next free
       # display after the two pickers, and a client gets in on each.
       "x-three-worst active active active DISPLAY=:[01] DISPLAY_LOW_DENSITY=:2 DISPLAY=ok DISPLAY_LOW_DENSITY=ok $"
-      "x-three-restart active active active DISPLAY=:[0-9]+ DISPLAY_LOW_DENSITY=:[0-9]+ DISPLAY=ok DISPLAY_LOW_DENSITY=ok $"
-      # The switch to the next generation ends clean, with no warning in
-      # its output. It links the init script of the new generation, and
-      # the sommelier instances come back with the new template.
-      "switch ok system=${nextToplevel} init=${nextToplevel}/init$"
-      "switch-warnings 0$"
-      "switch-failed \\[ *\\]"
-      "switch-user-failed \\[ *\\]"
-      "switch-template stable-scaling=${if nextStableScaling then "yes" else "no"}$"
-      "switch-x active active active DISPLAY=:[0-9]+ DISPLAY_LOW_DENSITY=:[0-9]+ DISPLAY=ok DISPLAY_LOW_DENSITY=ok $"
+      "x-three-restart ${xState}"
       # The instances of root come up beside the ones of the user, and
       # both sets survive the switch.
-      "root-x active active active DISPLAY=:[0-9]+ DISPLAY_LOW_DENSITY=:[0-9]+ $"
-      "root-user-x active active active DISPLAY=:[0-9]+ DISPLAY_LOW_DENSITY=:[0-9]+ DISPLAY=ok DISPLAY_LOW_DENSITY=ok $"
-      "switch-root-x active active active DISPLAY=:[0-9]+ DISPLAY_LOW_DENSITY=:[0-9]+ $"
+      "root-x ${xState}"
+      "root-user-x ${xState}"
+      "switch-root-x ${xState}"
+      # The switch restarts the sommelier instances with the new template,
+      # and the user manager ends with no failed unit.
+      "switch-user-failed \\[ *\\]"
+      "switch-template stable-scaling=${if nextStableScaling then "yes" else "no"}$"
+      "switch-x ${xState}"
     ]
-    ++ lib.optionals checkGtk2 [
+    ++ shared.switchChecks nextToplevel
+    ++ lib.optionals checkUi [
+      # The theme variables of the UI integration reach the login shell.
+      "login-theme GTK2_RC_FILES=/etc/gtk-2.0/gtkrc GTK_DATA_PREFIX=/run/current-system/sw XCURSOR_THEME=Adwaita $"
+      "gtk2 DISPLAY :[0-9]+ ok$"
+      "gtk2 DISPLAY_LOW_DENSITY :[0-9]+ ok$"
+      "gtk3 WAYLAND_DISPLAY wayland-0 ok$"
+      "gtk3 WAYLAND_DISPLAY_LOW_DENSITY wayland-1 ok$"
+      "after-gui sommelier@0.service active restarts=0$"
+      "after-gui sommelier@1.service active restarts=0$"
+      "after-gui sommelier-x@0.service active restarts=0$"
+      "after-gui sommelier-x@1.service active restarts=0$"
+      # The host shows each window. An application on the low-density
+      # instance sees a screen with half the pixels, so its window takes
+      # twice the size on the host. These lines come from the capture
+      # beside crosvm.
+      "host-window gtk2-normal [0-9]+x[0-9]+$"
+      "host-window gtk2-low [0-9]+x[0-9]+$"
+      "host-window gtk3-normal [0-9]+x[0-9]+$"
+      "host-window gtk3-low [0-9]+x[0-9]+$"
+      "host-scale gtk2 2x2$"
+      "host-scale gtk3 2x2$"
       "switch-gtk2 DISPLAY :[0-9]+ ok$"
       "switch-gtk2 DISPLAY_LOW_DENSITY :[0-9]+ ok$"
     ]
@@ -522,7 +572,7 @@ pkgs.runCommand name
     # them clean at the end, also on failure.
     touch console.log probe.log weston.log capture.log
     show_logs() {
-      ${lib.optionalString checkGtk2 "kill $capture 2>/dev/null || true"}
+      ${lib.optionalString checkUi "kill $capture 2>/dev/null || true"}
       kill $weston 2>/dev/null
       for f in console.log probe.log weston.log capture.log; do
         echo "===== $f"
@@ -537,13 +587,15 @@ pkgs.runCommand name
     # Let clients choose their initial size. The kiosk shell forces a
     # fullscreen resize before the first frame, which deadlocks Sommelier
     # 126's configure acknowledgement against Xwayland's frame callback.
+    # The fake seat stands in for the input of ChromeOS: a GTK 3 client
+    # on Wayland needs a seat from its compositor at start.
     export XDG_RUNTIME_DIR=$PWD/run
     export WAYLAND_DISPLAY=wayland-host
     export XDG_CACHE_HOME=$PWD/cache
     export FONTCONFIG_FILE=${pkgs.makeFontsConf { fontDirectories = [ pkgs.dejavu_fonts ]; }}
     mkdir -p $XDG_CACHE_HOME
     mkdir -m 0700 $XDG_RUNTIME_DIR
-    weston --backend=headless --socket=wayland-host --idle-time=0 \
+    weston --backend=headless --fake-seat --socket=wayland-host --idle-time=0 \
       --shell=desktop --renderer=pixman --debug --no-config --log=weston.log &
     weston=$!
     for _ in $(seq 60); do
@@ -552,7 +604,7 @@ pkgs.runCommand name
     done
     [ -S $XDG_RUNTIME_DIR/wayland-host ] || { echo "FAIL: weston did not start"; exit 1; }
 
-    ${lib.optionalString checkGtk2 ''
+    ${lib.optionalString checkUi ''
       timeout ${toString timeout} bash ${./capture-windows.sh} > capture.log 2>&1 &
       capture=$!
     ''}
@@ -576,22 +628,25 @@ pkgs.runCommand name
       status=1
     }
 
-    ${lib.optionalString checkGtk2 ''
+    ${lib.optionalString checkUi ''
       # The VM has stopped, so a missing screenshot cannot arrive later.
-      if [ ! -s screenshots/gtk2-0.png ] || [ ! -s screenshots/gtk2-1.png ]; then
-        echo "FAIL: GTK2 windows were not captured on both displays"
+      for slug in gtk2-normal gtk2-low gtk3-normal gtk3-low; do
+        [ -s screenshots/$slug.png ] && continue
+        echo "FAIL: window $slug was not captured"
         kill $capture 2>/dev/null || true
         status=1
-      fi
+      done
       wait $capture || status=1
     ''}
     mkdir -p $out
     cp console.log probe.log crosvm.log weston.log capture.log $out/
-    ${lib.optionalString checkGtk2 ''
+    ${lib.optionalString checkUi ''
       if [ -d screenshots ]; then cp -r screenshots $out/; fi
     ''}
 
-    ${checkProbes} probe.log > probes || status=1
+    # The capture reports the windows of the host in PROBE lines too.
+    cat probe.log capture.log > all.log
+    ${checkProbes} all.log > probes || status=1
     cat probes
 
     # Activation grows the filesystem to the size of the disk.

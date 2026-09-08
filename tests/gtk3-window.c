@@ -12,19 +12,20 @@ static gboolean finish(gpointer unused) {
 static gboolean inspect(gpointer unused) {
   gchar *theme = NULL;
   g_object_get(gtk_settings_get_default(), "gtk-theme-name", &theme, NULL);
-  // Adwaita uses its own base style and GTK's pixbuf engine for buttons.
-  const char *engine = G_OBJECT_TYPE_NAME(gtk_widget_get_style(window));
-  gboolean mapped = gdk_window_is_viewable(window->window);
-  gint width, height;
-  gdk_display_sync(gdk_display_get_default());
-  gdk_drawable_get_size(window->window, &width, &height);
-  GdkPixbuf *pixels = mapped ? gdk_pixbuf_get_from_drawable(NULL, window->window,
-      gtk_widget_get_colormap(window), 0, 0, 0, 0, width, height) : NULL;
-  status = !(g_strcmp0(theme, "Adwaita") == 0 &&
-      g_strcmp0(engine, "AdwaitaStyle") == 0 && pixels != NULL);
-  g_print("GTK2 theme=%s engine=%s mapped=%s rendered=%s size=%dx%d\n",
-      theme, engine, mapped ? "yes" : "no", pixels ? "yes" : "no", width, height);
-  if (pixels) g_object_unref(pixels);
+  // GTK falls back to Adwaita in silence when it does not find a theme.
+  // The CSS of the named provider tells which one it loaded.
+  gchar *named = gtk_css_provider_to_string(gtk_css_provider_get_named(theme, NULL));
+  gchar *fallback = gtk_css_provider_to_string(gtk_css_provider_get_named("Adwaita", NULL));
+  gboolean loaded = g_strcmp0(named, fallback) != 0;
+  gboolean mapped = gtk_widget_get_mapped(window);
+  const char *backend = G_OBJECT_TYPE_NAME(gdk_display_get_default());
+  gint width = gtk_widget_get_allocated_width(window);
+  gint height = gtk_widget_get_allocated_height(window);
+  status = !(g_strcmp0(theme, "CrosAdapta") == 0 && loaded && mapped);
+  g_print("GTK3 theme=%s loaded=%s mapped=%s size=%dx%d backend=%s\n",
+      theme, loaded ? "yes" : "no", mapped ? "yes" : "no", width, height, backend);
+  g_free(named);
+  g_free(fallback);
   g_free(theme);
   if (status) {
     gtk_main_quit();
@@ -41,19 +42,19 @@ int main(int argc, char **argv) {
   window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
   // The probe names the variable that gave the display, for the capture.
   const char *label = g_getenv("GTK_PROBE_LABEL");
-  if (!label) label = g_getenv("DISPLAY");
-  gchar *title = g_strdup_printf("Baguette GTK2 %s", label);
+  if (!label) label = g_getenv("WAYLAND_DISPLAY");
+  gchar *title = g_strdup_printf("Baguette GTK3 %s", label);
   gtk_window_set_title(GTK_WINDOW(window), title);
   g_free(title);
   gtk_window_set_default_size(GTK_WINDOW(window), 460, 260);
   gtk_container_set_border_width(GTK_CONTAINER(window), 16);
-  GtkWidget *box = gtk_vbox_new(FALSE, 12);
+  GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
   gtk_container_add(GTK_CONTAINER(window), box);
-  gtk_box_pack_start(GTK_BOX(box), gtk_label_new("GTK2 in the shipped Baguette image"), FALSE, FALSE, 0);
+  gtk_box_pack_start(GTK_BOX(box), gtk_label_new("GTK3 in the shipped Baguette image"), FALSE, FALSE, 0);
   GtkWidget *entry = gtk_entry_new();
-  gtk_entry_set_text(GTK_ENTRY(entry), "Adwaita from nixpkgs");
+  gtk_entry_set_text(GTK_ENTRY(entry), "CrosAdapta from the host mount");
   gtk_box_pack_start(GTK_BOX(box), entry, FALSE, FALSE, 0);
-  GtkWidget *check = gtk_check_button_new_with_label("GTK2 controls render correctly");
+  GtkWidget *check = gtk_check_button_new_with_label("GTK3 controls render correctly");
   gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(check), TRUE);
   gtk_box_pack_start(GTK_BOX(box), check, FALSE, FALSE, 0);
   GtkWidget *progress = gtk_progress_bar_new();

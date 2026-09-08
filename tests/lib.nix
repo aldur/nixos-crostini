@@ -28,9 +28,14 @@
     ''
       export PATH=/run/current-system/sw/bin:/run/wrappers/bin
       user=${lib.escapeShellArg user}
+      # The failed units of a manager: `failed_units systemctl` for the
+      # system, `failed_units as_user systemctl --user` for a user.
+      failed_units() {
+        "$@" list-units --state=failed --no-legend --plain | awk '{ print $1 }' | tr '\n' ' '
+      }
       ${setup}
 
-      failed=$(systemctl list-units --state=failed --no-legend --plain | awk '{print $1}' | tr '\n' ' ')
+      failed=$(failed_units systemctl)
       echo "PROBE failed [$failed]"
       for unit in $failed; do
         journalctl -u $unit --no-pager -o cat | tail -n 10
@@ -44,6 +49,29 @@
 
     echo "PROBE DONE"
   '';
+
+  # A switch to a generation from inside the guest, as the end of
+  # `nixos-rebuild switch`. The lines report the result, the links it
+  # leaves, the warnings in its output, and the failed system units.
+  switchProbe = toplevel: ''
+    if ${toplevel}/bin/switch-to-configuration switch > /tmp/switch.log 2>&1; then
+      switch=ok
+    else
+      switch=fail
+    fi
+    cat /tmp/switch.log
+    echo "PROBE switch $switch system=$(readlink -f /run/current-system) init=$(readlink -f /sbin/init)"
+    echo "PROBE switch-warnings $(grep -ci warning /tmp/switch.log)"
+    echo "PROBE switch-failed [$(failed_units systemctl)]"
+  '';
+
+  # Checks for the lines of `switchProbe`: a clean switch, with no
+  # warning, that links the generation.
+  switchChecks = toplevel: [
+    "switch ok system=${toplevel} init=${toplevel}/init$"
+    "switch-warnings 0$"
+    "switch-failed \\[ *\\]"
+  ];
 
   # Checks for the lines of `probeHead` and `probeTail`.
   commonChecks = user: [
