@@ -18,6 +18,9 @@
 # headless weston next to crosvm, which proxies its socket to the guest.
 # So sommelier, Xwayland, and an X client run as they do on ChromeOS.
 { lib }:
+let
+  shared = import ./lib.nix { inherit lib; };
+in
 {
   # The `nixosSystem` that builds the image. It must import
   # `nixos-crostini.nixosModules.baguette`.
@@ -25,14 +28,7 @@
   # Attribute name of the derivation.
   name ? "baguette-boot",
   # The interactive user of the guest.
-  user ?
-    let
-      users = lib.attrNames (lib.filterAttrs (_: u: u.isNormalUser) configuration.config.users.users);
-    in
-    if lib.length users == 1 then
-      lib.head users
-    else
-      throw "mkBaguetteTest: specify user when the image does not have exactly one normal user",
+  user ? shared.defaultUser "mkBaguetteTest" configuration,
   # Files for `/opt/google/cros-containers/probe`, as name-to-path pairs.
   # The probe reads them from `$probe`.
   probeFiles ? { },
@@ -43,7 +39,7 @@
   # the checks below. They run as root, with the tools of the image only.
   # `as_user CMD` runs a command as the interactive user.
   extraProbe ? "",
-  # Regular expressions, each matched against one `PROBE` line.
+  # Extended regular expressions, each matched against one `PROBE` line.
   extraChecks ? [ ],
   # Seconds. The guest powers itself off when the probe ends.
   timeout ? 900,
@@ -179,26 +175,22 @@ let
       '';
 
   # The probe runs as root using the image's shell and commands, plus the
-  # clients supplied on the tools disk. The shebang is the /bin/sh of NixOS.
+  # clients supplied on the tools disk.
   probe = pkgs.writeShellScript "probe.sh" ''
-    export PATH=/run/current-system/sw/bin:/run/wrappers/bin
-    probe=/opt/google/cros-containers/probe
-    user=${lib.escapeShellArg user}
-    # The output goes to a serial port with a file behind it. A program
-    # that sets terminal modes can stop the port for good, so no flow
-    # control, and no program output on the port.
-    stty -ixon -ixoff -crtscts 2>/dev/null
-    as_user() {
-      runuser -u $user -- env HOME=/home/$user XDG_RUNTIME_DIR=/run/user/1000 \
-        ${lib.escapeShellArgs (lib.mapAttrsToList (k: v: "${k}=${toString v}") userEnv)} "$@"
-    }
-
-    failed=$(systemctl list-units --state=failed --no-legend --plain | awk '{print $1}' | tr '\n' ' ')
-    echo "PROBE failed [$failed]"
-    for unit in $failed; do
-      journalctl -u $unit --no-pager -o cat | tail -n 10
-    done
-    echo "PROBE user $(id $user)"
+    ${shared.probeHead {
+      inherit user;
+      setup = ''
+        probe=/opt/google/cros-containers/probe
+        # The output goes to a serial port with a file behind it. A program
+        # that sets terminal modes can stop the port for good, so no flow
+        # control, and no program output on the port.
+        stty -ixon -ixoff -crtscts 2>/dev/null
+        as_user() {
+          runuser -u $user -- env HOME=/home/$user XDG_RUNTIME_DIR=/run/user/1000 \
+            ${lib.escapeShellArgs (lib.mapAttrsToList (k: v: "${k}=${toString v}") userEnv)} "$@"
+        }
+      '';
+    }}
     echo "PROBE home $(stat -c '%U %a' /home/$user)"
     echo "PROBE root $(findmnt -n -b -o FSTYPE,SIZE /)"
     echo "PROBE init $(readlink /sbin/init)"
@@ -261,9 +253,7 @@ let
       done
     ''}
 
-    ${extraProbe}
-
-    echo "PROBE DONE"
+    ${shared.probeTail extraProbe}
   '';
 
   # Xwayland does not start without the `fixed` and `cursor` fonts. One
@@ -340,38 +330,38 @@ let
     mkfs.btrfs -q -L cros-vm-tools -r root --shrink $out
   '';
 
-  checks = [
-    # The probe runs to its end. Each line below comes from a step of it.
-    "DONE$"
-    # Only the units of the image count. The stand-ins do not fail.
-    "failed \\[ *\\]"
-    # `vmc start` maps the ChromeOS user onto this UID.
-    "user uid=1000(${user})"
-    "home ${user} ${configuration.config.users.users.${user}.homeMode}$"
-    # The Baguette module links both. The init link is the stage-2 script:
-    # `init`, or `prepare-root` with the systemd initrd.
-    "init /nix/store/.*/\\(init\\|prepare-root\\)"
-    "usermod /nix/store/.*/usermod"
-    "sommelier active wayland-0$"
-    # Only the instances that default.target wants. No `@default`.
-    "sommelier-instances sommelier-x@0.service sommelier-x@1.service sommelier@0.service sommelier@1.service $"
-    # The user units of the image come up too, sommelier-x among them.
-    "user-failed \\[ *\\]"
-    # Each sommelier instance publishes the display it got.
-    "display DISPLAY=:0 DISPLAY_LOW_DENSITY=:1 WAYLAND_DISPLAY=wayland-0 WAYLAND_DISPLAY_LOW_DENSITY=wayland-1 $"
-    # The cookie of each display is in the file, and Xwayland enforces it.
-    "x :0 cookies=1 client=ok noauth=refused$"
-    "x :1 cookies=1 client=ok noauth=refused$"
-    # Older nixpkgs uses extraConfig; both spellings enable forwarding.
-    "journald ForwardToConsole=\\(true\\|yes\\)$"
-  ]
-  ++ lib.optionals checkGtk2 [
-    "gtk2 :0 ok$"
-    "gtk2 :1 ok$"
-    "after-gui sommelier-x@0.service active restarts=0$"
-    "after-gui sommelier-x@1.service active restarts=0$"
-  ]
-  ++ extraChecks;
+  # The stand-ins keep the units of the image from failing, so the shared
+  # check on failed units counts the units of the image only.
+  checks =
+    shared.commonChecks user
+    ++ [
+      "home ${user} ${configuration.config.users.users.${user}.homeMode}$"
+      # The Baguette module links both. The init link is the stage-2 script:
+      # `init`, or `prepare-root` with the systemd initrd.
+      "init /nix/store/.*/(init|prepare-root)"
+      "usermod /nix/store/.*/usermod"
+      "sommelier active wayland-0$"
+      # Only the instances that default.target wants. No `@default`.
+      "sommelier-instances sommelier-x@0.service sommelier-x@1.service sommelier@0.service sommelier@1.service $"
+      # The user units of the image come up too, sommelier-x among them.
+      "user-failed \\[ *\\]"
+      # Each sommelier instance publishes the display it got.
+      "display DISPLAY=:0 DISPLAY_LOW_DENSITY=:1 WAYLAND_DISPLAY=wayland-0 WAYLAND_DISPLAY_LOW_DENSITY=wayland-1 $"
+      # The cookie of each display is in the file, and Xwayland enforces it.
+      "x :0 cookies=1 client=ok noauth=refused$"
+      "x :1 cookies=1 client=ok noauth=refused$"
+      # Older nixpkgs uses extraConfig; both spellings enable forwarding.
+      "journald ForwardToConsole=(true|yes)$"
+    ]
+    ++ lib.optionals checkGtk2 [
+      "gtk2 :0 ok$"
+      "gtk2 :1 ok$"
+      "after-gui sommelier-x@0.service active restarts=0$"
+      "after-gui sommelier-x@1.service active restarts=0$"
+    ]
+    ++ extraChecks;
+
+  checkProbes = shared.mkCheckProbes pkgs checks;
 in
 pkgs.runCommand name
   {
@@ -463,8 +453,7 @@ pkgs.runCommand name
       if [ -d screenshots ]; then cp -r screenshots $out/; fi
     ''}
 
-    # systemd sends a terminal query to the tty before the first line.
-    sed 's/\r$//' probe.log | grep -o 'PROBE .*' > probes || true
+    ${checkProbes} probe.log > probes || status=1
     cat probes
 
     # Activation grows the filesystem to the size of the disk.
@@ -473,13 +462,5 @@ pkgs.runCommand name
       echo "FAIL: root filesystem not grown: $root_size <= $image_size"
       status=1
     fi
-    while IFS= read -r want; do
-      if ! grep -q "^PROBE $want" probes; then
-        echo "FAIL: no PROBE line matches: $want"
-        status=1
-      fi
-    done <<'CHECKS'
-    ${lib.concatStringsSep "\n" checks}
-    CHECKS
     exit $status
   ''

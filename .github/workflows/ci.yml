@@ -51,6 +51,10 @@ jobs:
             boot-test/*.log
             boot-test/screenshots/
           if-no-files-found: error
+      # Incus runs in a NixOS VM test, which also requires KVM.
+      - name: Boot the LXC image
+        if: matrix.arch == 'x86_64'
+        run: nix build -L --no-link .#checks.x86_64-linux.lxc-boot
       - run: nix build .#baguette-zimage
 
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
