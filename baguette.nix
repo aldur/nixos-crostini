@@ -162,6 +162,13 @@
             # Re-link the initScript (in case of toggling `boot.initrd.systemd.enable` or `boot.initrd.enable`)
             + ''
               ln -sf "$systemConfig/${initScript}" /sbin/init
+            ''
+            # The init script builder of nixpkgs compares the filesystem of
+            # /boot with the one of /. The image ships no /boot, so the first
+            # switch prints a warning. The builder creates the directory
+            # only after that check.
+            + ''
+              mkdir -p /boot
             '';
 
             # https://github.com/aldur/nixos-crostini/issues/3#issuecomment-3481799191
