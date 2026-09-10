@@ -46,7 +46,7 @@ jobs:
       - uses: DeterminateSystems/flake-checker-action@3164002371bc90729c68af0e24d5aacf20d7c9f6  # v12
 
       - run: nix flake check --no-build
-      - run: nix build --no-link .#baguette-tarball .#lxc-image-and-metadata
+      - run: nix build --no-link .#baguette-tarball .#lxc-image-and-metadata .#termina-kernel
       # The quick start of the README, as written: every `quick-start`
       # block, in order, with this checkout in place of the repository on
       # GitHub. The copy carries the lock file, so it builds the same
@@ -75,6 +75,16 @@ jobs:
       - name: Boot the LXC image
         if: matrix.kvm
         run: nix build -L --no-link .#checks.${{ matrix.system }}.lxc-boot
+      - name: Boot the Baguette image with Termina
+        if: matrix.kvm
+        run: nix build -L --out-link termina-boot-test .#checks.${{ matrix.system }}.baguette-boot-termina
+      - name: Upload Termina boot logs
+        if: matrix.kvm && success()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
+        with:
+          name: baguette-boot-termina-${{ matrix.arch }}
+          path: termina-boot-test/*.log
+          if-no-files-found: error
       - run: nix build .#baguette-zimage
 
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0

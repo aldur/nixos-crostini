@@ -71,6 +71,8 @@
           lxc-nixos = lxcNixosFor system;
         in
         rec {
+          termina-kernel = nixpkgs.legacyPackages.${system}.callPackage ./packages/termina-kernel.nix { };
+
           # The crostini module imports the LXC modules of nixpkgs, so the
           # configuration builds its own image and metadata.
           #
@@ -105,12 +107,29 @@
         baguette-boot = self.lib.mkBaguetteTest {
           configuration = baguetteNixosFor system;
         };
+        baguette-boot-termina =
+          let
+            kernel = self.packages.${system}.termina-kernel;
+          in
+          self.lib.mkBaguetteSmokeTest {
+            configuration = baguetteNixosFor system;
+            name = "baguette-boot-termina";
+            kernel = "${kernel}/kernel";
+            kernelRelease = "${kernel}/release";
+            extraProbe = ''
+              echo "PROBE kernel-modules $(test -e /proc/modules && echo present || echo absent)"
+            '';
+            extraChecks = [
+              "kernel-modules absent$"
+            ];
+          };
         lxc-boot = self.lib.mkLxcTest {
           configuration = lxcNixosFor system;
         };
       });
 
       lib.mkBaguetteTest = import ./tests/baguette-boot.nix { inherit (nixpkgs) lib; };
+      lib.mkBaguetteSmokeTest = import ./tests/baguette-smoke.nix { inherit (nixpkgs) lib; };
       lib.mkLxcTest = import ./tests/lxc-boot.nix { inherit (nixpkgs) lib; };
 
       nixosConfigurations = {
