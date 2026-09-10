@@ -5,7 +5,7 @@
 {
   lib,
   stdenv,
-  fetchFromGitiles,
+  fetchgit,
   bc,
   bison,
   cpio,
@@ -35,7 +35,9 @@ stdenv.mkDerivation {
   # and build .#termina-kernel to get the new source hash.
   version = "${kernelVersion}-chromeos";
 
-  src = fetchFromGitiles {
+  # Gitiles can return truncated archives for this large tree. Fetch the
+  # pinned commit over Git instead, with the same source integrity check.
+  src = fetchgit {
     url = "https://chromium.googlesource.com/chromiumos/third_party/kernel";
     rev = "a91057729ac86a115c514334de6fde7f715ee8b7";
     hash = "sha256-wTz19Bly3o255VfDYaQWp1H+9vIJL7sEH5Ykkjxe5yk=";
