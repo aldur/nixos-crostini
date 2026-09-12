@@ -76,7 +76,8 @@ let
   unset = make ../baguette.nix [ { users.users.alice.isNormalUser = true; } ];
   failures = c: map (a: a.message) (lib.filter (a: !a.assertion) c.assertions);
   sessionFailures = c: lib.filter (lib.hasPrefix "Crostini:") (failures c);
-  sessionWarnings = c: lib.filter (lib.hasPrefix "No user has crostini.enable set;") c.warnings;
+  # Identify the migration advice by its option, not the surrounding prose.
+  sessionWarnings = c: lib.filter (lib.hasInfix "users.users.<name>.crostini.enable") c.warnings;
   rejected = modules: sessionFailures (make ../baguette.nix modules) != [ ];
   units = [
     "sommelier@0.service"
@@ -113,10 +114,9 @@ assert !(renamed.users.users ? alice);
 assert shared.defaultUser "test" { config = renamed; } == "alice";
 assert (shared.userAccount { config = renamed; } "alice").uid == 1000;
 # Two enabled accounts must fail the real system evaluation, naming both.
-assert
-  sessionFailures multiple == [
-    "Crostini: only one user may enable crostini.enable; enabled for: users.users.alice, users.users.bob."
-  ];
+assert failures multiple == [ multipleMessage ];
+assert lib.elem multipleMessage (failures multipleDefaultUid);
+assert !(builtins.tryEval multipleDefaultUid.system.build.toplevel.drvPath).success;
 assert !(builtins.tryEval multiple.system.build.toplevel.drvPath).success;
 assert !(multiple.systemd.user.services.garcon.unitConfig ? ConditionUser);
 assert sessionWarnings multiple == [ ];
