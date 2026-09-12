@@ -1,5 +1,6 @@
 # Adapted from aldur/dotfiles (utils/baguette-test.nix, commit 4f804055).
-# Boots the shipped Baguette image in crosvm and runs a probe inside it.
+# An instrumented GUI/rebuild scenario, not the ChromeOS boot contract.
+# The separate baguette-smoke.nix checks unassisted no-initrd startup.
 # flake.nix exports this function as `lib.mkBaguetteTest`.
 #
 # The image has no kernel: Baguette boots the ChromeOS kernel. The test
@@ -33,7 +34,7 @@ in
   # Attribute name of the derivation.
   name ? "baguette-boot",
   # The interactive user of the guest.
-  user ? shared.defaultUser "mkBaguetteTest" configuration,
+  user ? shared.defaultUser "baguette-boot" configuration,
   # Files for `/opt/google/cros-containers/probe`, as name-to-path pairs.
   # The probe reads them from `$probe`.
   probeFiles ? { },
@@ -227,7 +228,8 @@ let
         run_as() {
           local name=$1 uid=$2
           shift 2
-          runuser -u $name -- env HOME=/home/$name XDG_RUNTIME_DIR=/run/user/$uid "$@"
+          setpriv --reuid "$uid" --regid "$(id -gn "$name")" --init-groups \
+            env HOME=/home/$name XDG_RUNTIME_DIR=/run/user/$uid "$@"
         }
         as_user() {
           run_as $user 1000 ${
@@ -271,6 +273,22 @@ let
     echo "PROBE journald $(grep '^ForwardToConsole=' /etc/systemd/journald.conf)"
     ${shared.commonModuleProbe}
 
+    # Assert the boot contract before a login, user provisioning or any
+    # explicit service start. Recheck on the second boot as well.
+    for _ in $(seq 60); do
+      systemctl is-active --quiet user@1000.service && break
+      sleep 1
+    done
+    systemctl is-active --quiet user@1000.service || exit 1
+    for unit in garcon.service sommelier@0.service sommelier@1.service sommelier-x@0.service sommelier-x@1.service; do
+      for _ in $(seq 60); do
+        as_user systemctl --user is-active --quiet "$unit" && break
+        sleep 1
+      done
+      as_user systemctl --user is-active --quiet "$unit" || exit 1
+    done
+    echo "PROBE unassisted-session active"
+
     # `vmc start` asks maitred to set up the user: `useradd` for a new
     # name, with the shell /bin/bash, or `usermod` for a known one, both
     # with the groups vmc passes by default, then linger through logind.
@@ -284,7 +302,14 @@ let
         /usr/sbin/useradd --uid $uid --create-home --shell /bin/bash --groups $vmc_groups $name \
           && result=useradd || result=useradd-failed
       fi
-      loginctl enable-linger $name
+      # Only the synthetic secondary user needs host provisioning here.
+      # Never repair the selected account, even in this instrumented test.
+      if [ "$name" != "$user" ]; then
+        # This secondary-account GUI fixture needs render access too.
+        # It is not evidence for ChromeOS host provisioning behavior.
+        /usr/sbin/usermod --append --groups render "$name"
+        loginctl enable-linger "$name"
+      fi
       echo "PROBE vmc-user $name $result" \
         "groups=$(id -Gn $name | tr ' ' '\n' | grep -c -x -F -f <(echo $vmc_groups | tr , '\n'))/11" \
         "shell=$(getent passwd $name | cut -d : -f 7)"
@@ -292,9 +317,7 @@ let
 
     # The windows of the guest go through sommelier. Its units come from
     # the image; the binary and its GBM backend come from the tools disk.
-    # On ChromeOS, maitred opens the user session and grants the render
-    # node.
-    chmod 0666 /dev/dri/renderD128 2>/dev/null
+    # Device access must come from the selected account's declared groups.
     vmc_user $user 1000
     for _ in $(seq 30); do
       as_user systemctl --user is-active --quiet sommelier@0.service 2>/dev/null && break
@@ -566,6 +589,7 @@ let
     shared.commonChecks user
     ++ shared.commonModuleChecks configuration
     ++ [
+      "unassisted-session active$"
       "system ${booted}$"
       "profile ${booted}$"
       "nix-db valid registration-consumed$"
@@ -573,7 +597,7 @@ let
       # or `prepare-root` with the systemd initrd.
       "init ${booted}/${initScript}$"
       "resolv /run/resolv.conf$"
-      "home ${user} ${configuration.config.users.users.${user}.homeMode}$"
+      "home ${user} ${(shared.userAccount configuration user).homeMode}$"
       "boot-dir present$"
       "usermod /nix/store/.*/usermod"
       "zoneinfo /etc/zoneinfo$"
@@ -667,6 +691,7 @@ pkgs.runCommand name
       pkgs.weston
     ];
     requiredSystemFeatures = [ "kvm" ];
+    passthru = { inherit probe; };
   }
   ''
     # A disk 2 GiB larger than the image, to also cover the resize at boot.

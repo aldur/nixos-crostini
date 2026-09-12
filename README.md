@@ -78,6 +78,14 @@ To add `baguette` support to your NixOS existing configuration:
 
 1. Add this flake as an input.
 1. Add `inputs.nixos-crostini.nixosModules.baguette` to your modules.
+1. Enable `crostini.enable` for your user:
+
+```nix
+users.users.aldur = {
+  isNormalUser = true;
+  crostini.enable = true;
+};
+```
 
 Here is a _very minimal_ example:
 

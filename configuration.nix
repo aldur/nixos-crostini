@@ -5,10 +5,13 @@
 {
   # inputs,
   # lib,
-  # config,
   pkgs,
   ...
 }:
+let
+  # TODO: Replace `aldur` with the username you picked when configuring Linux in ChromeOS.
+  user = "aldur";
+in
 {
   imports = [
     # You can import other NixOS modules here.
@@ -30,12 +33,9 @@
 
   # Configure your system-wide user settings (groups, etc), add more users as needed.
   users.users = {
-    # TODO: Replace `aldur` with the username you picked when configuring Linux
-    # in ChromeOS.
-    aldur = {
+    ${user} = {
       isNormalUser = true;
-
-      linger = true;
+      crostini.enable = true;
       extraGroups = [ "wheel" ];
     };
   };

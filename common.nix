@@ -6,6 +6,10 @@
 }:
 
 let
+  selectedUsers = lib.filterAttrs (_: user: user.crostini.enable) config.users.users;
+  users = lib.attrValues selectedUsers;
+  user = if lib.length users == 1 then lib.head users else null;
+
   cros-container-guest-tools-src-version = "4ef17fb17e0617dff3f6e713c79ce89fee4e60f7";
 
   cros-container-guest-tools-src = pkgs.fetchgit {
@@ -53,6 +57,24 @@ let
 in
 {
   options = {
+    users.users = lib.mkOption {
+      type = lib.types.attrsOf (
+        lib.types.submodule (
+          { config, ... }: {
+            options.crostini.enable = lib.mkEnableOption "register this user with ChromeOS";
+            config = lib.mkIf config.crostini.enable {
+              uid = lib.mkDefault 1000;
+              linger = lib.mkDefault true;
+              extraGroups = [
+                "video"
+                "render"
+              ];
+            };
+          }
+        )
+      );
+    };
+
     crostini = {
       sommelier.stableScaling = lib.mkEnableOption "`--stable-scaling` for the X11 sommelier" // {
         description = ''
@@ -85,6 +107,30 @@ in
   };
 
   config = {
+    warnings = lib.optional (users == [ ]) ''
+      No user has crostini.enable set. Set `users.users.<name>.crostini.enable
+      = true` to start that user's session at boot. 
+    '';
+
+    assertions = [
+      {
+        assertion = lib.length users <= 1;
+        message = "Crostini: only one user may enable crostini.enable; enabled for: ${
+          lib.concatMapStringsSep ", " (name: "users.users.${name}") (lib.attrNames selectedUsers)
+        }.";
+      }
+    ]
+    ++ lib.concatMap (account: [
+      {
+        assertion = account.enable && account.isNormalUser && !account.isSystemUser && account.uid != 0;
+        message = "Crostini: ${account.name} must be an enabled normal user, not root or a system account.";
+      }
+      {
+        assertion = account.linger == true;
+        message = "Crostini: ${account.name} requires `linger = true` for registration before login.";
+      }
+    ]) users;
+
     networking = {
       # The eth0 interface in this container/VM can only be accessed from the host.
       firewall.enable = false;
@@ -176,33 +222,47 @@ in
       '';
     };
 
-    # The LXC module of nixpkgs imports the minimal profile, which turns
-    # off the MIME defaults and the icon directories of the system path.
-    # garcon needs the first, the UI integration the second.
-    xdg.mime.enable = true;
-    xdg.icons.enable = true;
+    xdg = {
+      # The LXC module of nixpkgs imports the minimal profile, which turns
+      # off the MIME defaults and the icon directories of the system path.
+      # garcon needs the first, the UI integration the second.
+      mime.enable = true;
+      icons.enable = true;
 
-    # Taken from https://aur.archlinux.org/packages/cros-container-guest-tools-git
-    xdg.mime.defaultApplications = {
-      "text/html" = "garcon_host_browser.desktop";
-      "x-scheme-handler/http" = "garcon_host_browser.desktop";
-      "x-scheme-handler/https" = "garcon_host_browser.desktop";
-      "x-scheme-handler/about" = "garcon_host_browser.desktop";
-      "x-scheme-handler/unknown" = "garcon_host_browser.desktop";
+      # Taken from https://aur.archlinux.org/packages/cros-container-guest-tools-git
+      mime.defaultApplications = {
+        "text/html" = "garcon_host_browser.desktop";
+        "x-scheme-handler/http" = "garcon_host_browser.desktop";
+        "x-scheme-handler/https" = "garcon_host_browser.desktop";
+        "x-scheme-handler/about" = "garcon_host_browser.desktop";
+        "x-scheme-handler/unknown" = "garcon_host_browser.desktop";
+      };
     };
 
     systemd = {
       user = {
         services = {
           garcon = {
-            # TODO: In the original service definition this only starts _after_ sommelier.
             description = "Chromium OS Garcon Bridge";
+            # Other accounts can use the displays without registering a
+            # second garcon session when a diagnostic login is opened.
+            unitConfig.ConditionUser = lib.mkIf (user != null) user.name;
             wantedBy = [ "default.target" ];
+            # The notify services publish the displays before garcon can
+            # launch applications on behalf of the host.
+            requires = [
+              "sommelier@0.service"
+              "sommelier@1.service"
+              "sommelier-x@0.service"
+              "sommelier-x@1.service"
+            ];
+            after = config.systemd.user.services.garcon.requires;
             serviceConfig = {
               ExecStart = "/opt/google/cros-containers/bin/garcon --server";
               Type = "simple";
               ExecStopPost = "/opt/google/cros-containers/bin/guest_service_failure_notifier cros-garcon";
               Restart = "always";
+              RestartSec = 1;
             };
             environment = {
               BROWSER = lib.getExe' cros-container-guest-tools "garcon-url-handler";

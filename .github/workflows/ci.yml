@@ -46,6 +46,8 @@ jobs:
       - uses: DeterminateSystems/flake-checker-action@3164002371bc90729c68af0e24d5aacf20d7c9f6  # v12
 
       - run: nix flake check --no-build
+      - name: Check the guest session contract and boot log verifier
+        run: nix build --no-link .#checks.${{ matrix.system }}.guest-session .#checks.${{ matrix.system }}.boot-verifier
       - run: nix build --no-link .#baguette-tarball .#lxc-image-and-metadata .#termina-kernel
       # The quick start of the README, as written: every `quick-start`
       # block, in order, with this checkout in place of the repository on
