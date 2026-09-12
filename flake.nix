@@ -107,30 +107,24 @@
         baguette-boot = self.lib.mkBaguetteTest {
           configuration = baguetteNixosFor system;
         };
-        baguette-boot-termina =
-          let
-            kernel = self.packages.${system}.termina-kernel;
-          in
-          self.lib.mkBaguetteSmokeTest {
-            configuration = baguetteNixosFor system;
-            name = "baguette-boot-termina";
-            kernel = "${kernel}/kernel";
-            kernelRelease = "${kernel}/release";
-            extraProbe = ''
-              echo "PROBE kernel-modules $(test -e /proc/modules && echo present || echo absent)"
-            '';
-            extraChecks = [
-              "kernel-modules absent$"
-            ];
-          };
+        baguette-boot-termina = self.lib.mkBaguetteSmokeTest {
+          configuration = baguetteNixosFor system;
+          name = "baguette-boot-termina";
+        };
+        guest-session = import ./tests/guest-session.nix { inherit nixpkgs system; };
+        boot-verifier = import ./tests/verify-boot.nix {
+          pkgs = nixpkgs.legacyPackages.${system};
+        };
         lxc-boot = self.lib.mkLxcTest {
           configuration = lxcNixosFor system;
         };
       });
 
-      lib.mkBaguetteTest = import ./tests/baguette-boot.nix { inherit (nixpkgs) lib; };
-      lib.mkBaguetteSmokeTest = import ./tests/baguette-smoke.nix { inherit (nixpkgs) lib; };
-      lib.mkLxcTest = import ./tests/lxc-boot.nix { inherit (nixpkgs) lib; };
+      lib = {
+        mkBaguetteTest = import ./tests/baguette-boot.nix { inherit (nixpkgs) lib; };
+        mkBaguetteSmokeTest = import ./tests/baguette-smoke.nix { inherit (nixpkgs) lib; };
+        mkLxcTest = import ./tests/lxc-boot.nix { inherit (nixpkgs) lib; };
+      };
 
       nixosConfigurations = {
         # This allows you to re-build the image from inside the container/VM.

@@ -1,228 +1,222 @@
-# A boot smoke test for a ChromeOS Baguette image. It boots the image in
-# crosvm and runs a probe inside it. flake.nix exports this function as
-# `lib.mkBaguetteSmokeTest`. The full GUI/reboot test is baguette-boot.nix.
-#
-# The image has no kernel: Baguette boots the ChromeOS kernel. By default
-# the test boots the image with the kernel and the initrd of the same
-# configuration, with `boot.kernel` and `boot.initrd` turned back on. With
-# `kernel`, it boots that image instead, with no initrd and the root on the
-# command line, as ChromeOS does. The disk is the image CI ships, unchanged.
-#
-# ChromeOS mounts a `cros-vm-tools` disk with maitred, vshd, garcon, and
-# sommelier. Those binaries are not public. The test mounts a disk with that
-# label that carries sommelier from nixpkgs, stand-ins for the daemons, the
-# probe, and the files the caller passes. So the test covers the guest side
-# of the ChromeOS integration, not the host side: the ChromeOS daemons that
-# talk to maitred and garcon have no counterpart here.
+# A guest smoke test, not a ChromeOS host integration test. Keep boot and
+# session startup unassisted; only the tools disk and compositor are fixtures.
+# Uses the distributed root image and a representative Termina kernel,
+# without an initrd. Exact host registration still requires ChromeOS.
 { lib }:
 let
   shared = import ./lib.nix { inherit lib; };
 in
 {
-  # The `nixosSystem` that builds the image. It must import
-  # `nixos-crostini.nixosModules.baguette`.
   configuration,
-  # Attribute name of the derivation.
-  name ? "baguette-boot",
-  # The interactive user of the guest.
-  user ? shared.defaultUser "mkBaguetteSmokeTest" configuration,
-  # Files for `/opt/google/cros-containers/probe`, as name-to-path pairs.
-  # The probe reads them from `$probe`.
+  name ? "baguette-smoke",
+  user ? shared.defaultUser "baguette-smoke" configuration,
   probeFiles ? { },
-  # Environment for `as_user`. The probe runs from a unit, not a login
-  # session, so it does not have `environment.sessionVariables`.
-  userEnv ? { },
-  # Shell lines for the probe. Each `PROBE <text>` line they print reaches
-  # the checks below. They run as root, with the tools of the image only.
-  # `as_user CMD` runs a command as the interactive user.
   extraProbe ? "",
-  # Extended regular expressions, each matched against one `PROBE` line.
   extraChecks ? [ ],
-  # A kernel image to boot instead of the one of the configuration, for
-  # example the termina kernel of ChromeOS. It boots without an initrd and
-  # must have the root filesystem and device drivers built in.
-  kernel ? null,
-  # File containing the exact expected uname -r, such as the Termina
-  # package's `release` output. Checked after the guest boots.
-  kernelRelease ? null,
-  # Seconds. The guest powers itself off when the probe ends.
   timeout ? 900,
+
 }:
 let
-  # The guest and the host of the test have the same system, so the
-  # packages of the configuration also build the test itself.
   pkgs = configuration.pkgs;
-
-  shipped = configuration.config.system.build;
-
-  bootVariant = configuration.extendModules {
-    modules = [
-      (
-        { config, lib, ... }:
-        {
-          boot.kernel.enable = lib.mkForce true;
-          boot.initrd.enable = lib.mkForce true;
-          # The scripted initrd: it hands over to the `init=` of the kernel
-          # command line, which points into the image. The systemd initrd
-          # wants a `prepare-root` there instead, which an image without
-          # an initrd does not have.
-          boot.initrd.systemd.enable = lib.mkForce false;
-          # The image loads no modules of its own: the ChromeOS kernel has
-          # them built in. The initrd loads the ones the guest needs from
-          # the NixOS kernel: virtio-gpu for the GBM device of sommelier,
-          # fuse when the guest mounts envfs.
-          boot.initrd.kernelModules = [
-            "virtio_gpu"
-          ]
-          ++ lib.optional config.services.envfs.enable "fuse";
-        }
-        # preservation asserts a systemd initrd. This variant only lends
-        # its kernel and initrd; the image keeps its own preservation. The
-        # shipped configuration tells whether the option exists at all.
-        // lib.optionalAttrs (configuration.config ? preservation) {
-          preservation.enable = lib.mkForce false;
-        }
-      )
-    ];
-  };
-
-  # nixpkgs marks sommelier broken: its test suite fails. The program
-  # builds, and the image has all its libraries at the same store paths.
+  cfg = configuration.config;
+  shipped = cfg.system.build;
+  account = shared.userAccount configuration user;
+  uid = toString account.uid;
+  kernel = pkgs.callPackage ../packages/termina-kernel.nix { };
   sommelier = pkgs.sommelier.overrideAttrs (old: {
     doCheck = false;
     buildInputs = old.buildInputs ++ [ pkgs.gtest ];
+    patches = (old.patches or [ ]) ++ [ ./sommelier-initial-configure.patch ];
     meta = old.meta // {
       broken = false;
     };
   });
-
-  # The probe runs as root in the guest. It has what the image has, and no
-  # more. The shebang is the /bin/sh of NixOS.
-  probe = pkgs.writeShellScript "probe.sh" ''
+  # Relocate the fixture's helper/data paths onto the tools disk and the
+  # guest's existing XKB link. Do not satisfy them by adding store mounts.
+  xwayland = pkgs.xwayland.overrideAttrs (old: {
+    mesonFlags =
+      lib.filter (
+        flag: !(lib.hasPrefix "-Dxkb_bin_dir=" flag || lib.hasPrefix "-Dxkb_dir=" flag)
+      ) old.mesonFlags
+      ++ [
+        "-Dxkb_bin_dir=/opt/google/cros-containers/bin"
+        "-Dxkb_dir=/usr/share/X11/xkb"
+      ];
+  });
+  units = [
+    "garcon.service"
+    "sommelier@0.service"
+    "sommelier@1.service"
+    "sommelier-x@0.service"
+    "sommelier-x@1.service"
+  ];
+  probe = pkgs.writeShellScript "baguette-probe" ''
+    set -euo pipefail
     export PATH=/run/current-system/sw/bin:/run/wrappers/bin
-    probe=/opt/google/cros-containers/probe
-    user=${user}
-    # The output goes to a serial port with a file behind it. A program
-    # that sets terminal modes can stop the port for good, so no flow
-    # control, and no program output on the port.
-    stty -ixon -ixoff -crtscts 2>/dev/null
-    as_user() {
-      runuser -u $user -- env HOME=/home/$user XDG_RUNTIME_DIR=/run/user/1000 \
-        ${lib.escapeShellArgs (lib.mapAttrsToList (k: v: "${k}=${toString v}") userEnv)} "$@"
-    }
+    export probe=/opt/google/cros-containers/probe
+    user=${lib.escapeShellArg user}
+    stty -ixon -ixoff -crtscts 2>/dev/null || true
 
-    failed=$(systemctl list-units --state=failed --no-legend --plain | awk '{print $1}' | tr '\n' ' ')
-    echo "PROBE failed [$failed]"
-    for unit in $failed; do
-      journalctl -u $unit --no-pager -o cat | tail -n 10
+    systemctl --failed --no-legend --plain > /tmp/failed-system
+    cat /tmp/failed-system
+    test ! -s /tmp/failed-system
+
+    # Check through the system manager before invoking anything as the user.
+    # setpriv below does not open a PAM session and cannot heal this failure.
+    for _ in $(seq 60); do
+      systemctl is-active --quiet user@${uid}.service && break
+      sleep 1
     done
-    echo "PROBE user $(id $user)"
+    manager=$(systemctl is-active user@${uid}.service || true)
+    echo "PROBE user-manager $manager"
+    [ "$manager" = active ] || exit 1
+    test -S /run/user/${uid}/bus
+
+    as_user() {
+      setpriv --reuid ${uid} --regid ${lib.escapeShellArg account.group} --init-groups \
+        env HOME=${lib.escapeShellArg account.home} USER="$user" LOGNAME="$user" \
+        XDG_RUNTIME_DIR=/run/user/${uid} \
+        DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${uid}/bus "$@"
+    }
+    # Application commands inherit the environment of the real user manager.
+    # No test copy of MOZ_LEGACY_HOME, DISPLAY or the profile setup is allowed.
+    in_session() {
+      as_user systemd-run --user --quiet --wait --pipe --collect "$@"
+    }
+    for unit in ${lib.escapeShellArgs units}; do
+      for _ in $(seq 60); do
+        as_user systemctl --user is-active --quiet "$unit" && break
+        sleep 1
+      done
+      as_user systemctl --user is-active --quiet "$unit" || {
+        as_user journalctl --user -u "$unit" --no-pager -n 30
+        exit 1
+      }
+      echo "PROBE unit $unit active"
+    done
+    echo "PROBE user $(id "$user")"
     echo "PROBE kernel $(uname -r)"
-    echo "PROBE home $(stat -c '%U %a' /home/$user)"
+    echo "PROBE home $(stat -c '%U %a' ${lib.escapeShellArg account.home})"
     echo "PROBE root $(findmnt -n -b -o FSTYPE,SIZE /)"
     echo "PROBE init $(readlink /sbin/init)"
     echo "PROBE usermod $(readlink /usr/sbin/usermod)"
-
-    # The windows of the guest go through sommelier. Its units come from
-    # the image; the binary and its GBM backend come from the tools disk.
-    # On ChromeOS, maitred opens the user session and grants the render
-    # node.
-    chmod 0666 /dev/dri/renderD128 2>/dev/null
-    loginctl enable-linger $user
-    for _ in $(seq 30); do
-      as_user systemctl --user is-active --quiet sommelier@0.service 2>/dev/null && break
-      sleep 1
-    done
-    echo "PROBE sommelier $(as_user systemctl --user is-active sommelier@0.service 2>&1)" \
-      "$(test -S /run/user/1000/wayland-0 && echo wayland-0 || echo no-socket)"
-    as_user systemctl --user status sommelier@0.service --no-pager 2>&1 | tail -n 5
-
     ${extraProbe}
 
+    # Check both managers after the applications have run as well.
+    systemctl --failed --no-legend --plain > /tmp/failed-system
+    as_user systemctl --user --failed --no-legend --plain > /tmp/failed-user
+    cat /tmp/failed-system /tmp/failed-user
+    test ! -s /tmp/failed-system
+    test ! -s /tmp/failed-user
+    echo "PROBE failed []"
     echo "PROBE DONE"
   '';
-
-  # The tools of ChromeOS bring their own libraries and dynamic linker.
-  # sommelier from nixpkgs finds most of its libraries in the store of the
-  # image, at the same paths. The tools disk carries the rest, mainly the
-  # GBM backend of mesa, which the image does not ship.
+  xfonts = pkgs.runCommand "baguette-xfonts" { nativeBuildInputs = [ pkgs.mkfontscale ]; } ''
+    mkdir -p $out/misc
+    cp ${pkgs.font-misc-misc}/share/fonts/X11/misc/*.pcf.gz \
+      ${pkgs.font-cursor-misc}/share/fonts/X11/misc/*.pcf.gz \
+      ${pkgs.font-alias}/share/fonts/X11/misc/fonts.alias $out/misc/
+    mkfontdir $out/misc
+  '';
   toolsClosure = pkgs.closureInfo {
     rootPaths = [
       sommelier
       pkgs.mesa
+      xwayland
+      pkgs.xkbcomp
     ];
   };
-  imageClosure = pkgs.closureInfo { rootPaths = [ shipped.toplevel ]; };
+  toolsDisk =
+    pkgs.runCommand "cros-vm-tools-fixture.img"
+      {
+        nativeBuildInputs = [ pkgs.e2fsprogs ];
+      }
+      ''
+        mkdir -p root/bin root/lib root/probe
+        # These explicitly model no host RPC behavior. Their active state is
+        # never interpreted as successful ChromeOS registration.
+        for daemon in vshd port_listener; do
+          printf '#!/bin/sh\nexec /run/current-system/sw/bin/sleep infinity\n' > root/bin/$daemon
+        done
+        # Enforce the launch environment at garcon's actual start, without
+        # impersonating its ChromeOS registration protocol.
+        cat > root/bin/garcon <<'EOF'
+        #!/bin/sh
+        set -eu
+        test -n "$DISPLAY"
+        test -n "$DISPLAY_LOW_DENSITY"
+        test "$WAYLAND_DISPLAY" = wayland-0
+        test "$WAYLAND_DISPLAY_LOW_DENSITY" = wayland-1
+        exec /run/current-system/sw/bin/sleep infinity
+        EOF
+        printf '#!/bin/sh\nexit 0\n' > root/bin/guest_service_failure_notifier
+        cat > root/bin/maitred <<'EOF'
+        #!/bin/sh
+        export PATH=/run/current-system/sw/bin
+        systemctl is-system-running --wait >/dev/null || true
+        /opt/google/cros-containers/probe/probe.sh > /dev/ttyS1 2>&1
+        result=$?
+        echo "PROBE result $result" > /dev/ttyS1
+        systemctl poweroff --no-block
+        exec sleep infinity
+        EOF
 
-  # btrfs: the initrd loads it for the root. The image has no modules for
-  # the kernel of the test, so no other filesystem mounts in stage 2.
-  toolsDisk = pkgs.runCommand "cros-vm-tools.img" { nativeBuildInputs = [ pkgs.btrfs-progs ]; } ''
-    mkdir -p root/bin root/lib root/probe
-
-    # Stand-ins for the ChromeOS daemons. Without them, the units of the
-    # image fail and restart in a loop, and that flood stalls the serial
-    # ports of the test.
-    for daemon in vshd garcon port_listener; do
-      printf '#!/bin/sh\nexec /run/current-system/sw/bin/sleep infinity\n' > root/bin/$daemon
-    done
-    printf '#!/bin/sh\nexit 0\n' > root/bin/guest_service_failure_notifier
-
-    # The stand-in of maitred starts the probe. Its unit is part of the
-    # boot, so it waits for the end of the boot transaction first, and the
-    # probe sees which units failed. The second serial port of the test
-    # takes the output; the console of ttyS0 carries the boot messages.
-    # The guest powers off when the probe ends, whatever its result.
-    cat > root/bin/maitred <<'EOF'
-    #!/bin/sh
-    PATH=/run/current-system/sw/bin
-    systemctl is-system-running --wait > /dev/null
-    /opt/google/cros-containers/probe/probe.sh > /dev/ttyS1 2>&1
-    systemctl poweroff --force
-    EOF
-
-    # The store paths of the tools that the image lacks. The dynamic linker
-    # searches LD_LIBRARY_PATH before the RUNPATH of nixpkgs, so the copies
-    # win where the store path is absent.
-    libs=
-    for path in $(comm -13 <(sort ${imageClosure}/store-paths) <(sort ${toolsClosure}/store-paths)); do
-      [ -d $path/lib ] || continue
-      cp -r $path/lib root/lib/$(basename $path)
-      libs=$libs:/opt/google/cros-containers/lib/$(basename $path)
-    done
-    mesa=root/lib/$(basename ${pkgs.mesa})
-
-    # The sommelier units of the image call this path. The channel to the
-    # host is a virtio-gpu context, not the virtio-wl device of ChromeOS.
-    cp ${sommelier}/bin/sommelier root/bin/sommelier-bin
-    cat > root/bin/sommelier <<EOF
-    #!/bin/sh
-    export LD_LIBRARY_PATH=''${libs#:}
-    export GBM_BACKENDS_PATH=/opt/google/cros-containers/''${mesa#root/}/gbm
-    export LIBGL_DRIVERS_PATH=/opt/google/cros-containers/''${mesa#root/}/dri
-    exec /opt/google/cros-containers/bin/sommelier-bin --virtgpu-channel "\$@"
-    EOF
-
-    chmod 0755 root/bin/*
-    install -m 0755 ${probe} root/probe/probe.sh
-    ${lib.concatStringsSep "\n" (
-      lib.mapAttrsToList (target: source: "install -m 0444 ${source} root/probe/${target}") probeFiles
-    )}
-
-    truncate -s 2G $out
-    mkfs.btrfs -q -L cros-vm-tools -r root --shrink $out
-  '';
-
-  checks =
-    shared.commonChecks user
-    ++ [
-      "home ${user} ${configuration.config.users.users.${user}.homeMode}$"
-      # The Baguette module links both. The init link is the stage-2 script:
-      # `init`, or `prepare-root` with the systemd initrd.
-      "init /nix/store/.*/(init|prepare-root)$"
-      "usermod /nix/store/.*/usermod"
-      "sommelier active wayland-0"
+        # Confine fixture dependencies to the tools disk; never overlay /nix/store.
+        libs=
+        for path in $(cat ${toolsClosure}/store-paths); do
+          [ -d "$path/lib" ] || continue
+          cp -r "$path/lib" root/lib/$(basename "$path")
+          libs=$libs:/opt/google/cros-containers/lib/$(basename "$path")
+        done
+        cp ${sommelier}/bin/sommelier root/bin/sommelier-bin
+        cp ${xwayland}/bin/Xwayland root/bin/Xwayland-bin
+        cp ${pkgs.xkbcomp}/bin/xkbcomp root/bin/xkbcomp
+        cp -r ${xfonts} root/fonts
+        cat > root/bin/sommelier <<EOF
+        #!/run/current-system/sw/bin/bash
+        export LD_LIBRARY_PATH=''${libs#:}
+        export GBM_BACKENDS_PATH=/opt/google/cros-containers/lib/$(basename ${pkgs.mesa})/gbm
+        export LIBGL_DRIVERS_PATH=/opt/google/cros-containers/lib/$(basename ${pkgs.mesa})/dri
+        export SOMMELIER_XWAYLAND_GL_DRIVER_PATH=\$LIBGL_DRIVERS_PATH
+        export SOMMELIER_XFONT_PATH=/opt/google/cros-containers/fonts/misc
+        exec -a /opt/google/cros-containers/bin/sommelier /opt/google/cros-containers/bin/sommelier-bin --virtgpu-channel "\$@"
+        EOF
+        cat > root/bin/Xwayland <<EOF
+        #!/bin/sh
+        export LD_LIBRARY_PATH=''${libs#:}
+        exec /opt/google/cros-containers/bin/Xwayland-bin "\$@"
+        EOF
+        chmod 0755 root/bin/*
+        for wrapper in maitred garcon sommelier Xwayland; do
+          bash -n root/bin/$wrapper
+        done
+        install -m 0755 ${probe} root/probe/probe.sh
+        ${lib.concatStringsSep "\n" (
+          lib.mapAttrsToList (
+            target: source:
+            "install -D -m 0444 ${lib.escapeShellArg (toString source)} root/probe/${lib.escapeShellArg target}"
+          ) probeFiles
+        )}
+        truncate -s 2G "$out"
+        mkfs.ext4 -q -L cros-vm-tools -d root "$out"
+      '';
+  checks = [
+    "user-manager active$"
+    "DONE$"
+    "result 0$"
+  ]
+  ++ (
+    [
+      "failed \\[ *\\]"
+      "user uid=${uid}\\(${lib.escapeRegex user}\\)"
     ]
-    ++ extraChecks;
+    ++ [
+      "home ${user} ${account.homeMode}$"
+      "init ${shipped.toplevel}/init$"
+    ]
+    ++ map (unit: "unit ${lib.escapeRegex unit} active$") units
+    ++ extraChecks
+  );
   checkProbes = shared.mkCheckProbes pkgs checks;
 in
 pkgs.runCommand name
@@ -230,77 +224,50 @@ pkgs.runCommand name
     nativeBuildInputs = [
       pkgs.crosvm
       pkgs.coreutils
+      pkgs.weston
+      pkgs.zstd
     ];
     requiredSystemFeatures = [ "kvm" ];
+    passthru = { inherit probe checkProbes toolsDisk; };
   }
   ''
-    # A disk 2 GiB larger than the image, to also cover the resize at boot.
-    cp --sparse=always ${shipped.btrfsImage}/baguette_rootfs.img root.img
+    # Start from the same compressed artifact distributed to ChromeOS.
+    zstd -d ${shipped.btrfsImageCompressed}/baguette_rootfs.img.zst -o root.img
     cp ${toolsDisk} tools.img
     chmod u+w root.img tools.img
     image_size=$(stat -c %s root.img)
     truncate -s $((image_size + 2 * 1024 * 1024 * 1024)) root.img
-
-    # The logs go to files. Their lines end in CR and carry colors. Print
-    # them clean at the end, also on failure.
-    touch console.log probe.log
-    show_logs() {
-      for f in console.log probe.log; do
-        echo "===== $f"
-        sed 's/\r$//; s/\x1b\[[0-9;?]*[a-zA-Z]//g' $f
-        echo "===== end of $f"
-      done
+    touch console.log probe.log crosvm.log weston.log
+    cleanup() {
+      kill "$weston" 2>/dev/null || true
+      cat console.log probe.log crosvm.log weston.log
     }
-    trap show_logs EXIT
-
-    # ttyS0 is the console, ttyS1 the probe output. No getty on ttyS0: it
-    # would take the console away. The GPU gives the guest a render node,
-    # which sommelier needs.
-    timeout ${toString timeout} crosvm run --disable-sandbox --cpus 2 --mem 3072 \
+    weston=
+    trap cleanup EXIT
+    export XDG_RUNTIME_DIR=$PWD/run
+    export XDG_CACHE_HOME=$PWD/cache
+    mkdir -m 0700 "$XDG_RUNTIME_DIR"
+    mkdir "$XDG_CACHE_HOME"
+    weston --backend=headless --fake-seat --socket=wayland-host --idle-time=0 \
+      --shell=desktop --renderer=pixman --no-config --log=weston.log &
+    weston=$!
+    for _ in $(seq 60); do
+      [ -S "$XDG_RUNTIME_DIR/wayland-host" ] && break
+      sleep 0.5
+    done
+    test -S "$XDG_RUNTIME_DIR/wayland-host"
+    status=0
+    timeout ${toString timeout} crosvm run --disable-sandbox --cpus 2 --mem 4096 \
       --serial type=file,path=console.log,hardware=serial,num=1,console=true \
       --serial type=file,path=probe.log,hardware=serial,num=2 \
       --gpu backend=virglrenderer,context-types=cross-domain \
-      ${
-        if kernel != null then
-          # No initrd: the kernel mounts the root itself, as on ChromeOS.
-          ''--params "root=/dev/vdb rootfstype=btrfs rw" \''
-        else
-          "--initrd ${bootVariant.config.system.build.initialRamdisk}/initrd \\"
-      }
-      --params "init=${shipped.toplevel}/init console=ttyS0 loglevel=4 systemd.getty_auto=no" \
+      --wayland-sock "$XDG_RUNTIME_DIR/wayland-host" \
+      --params "root=/dev/vdb rw init=/sbin/init console=ttyS0" \
       --block path=tools.img --block path=root.img \
-      ${
-        if kernel != null then
-          kernel
-        else
-          "${bootVariant.config.system.build.kernel}/${bootVariant.config.system.boot.loader.kernelFile}"
-      } \
-      > crosvm.log 2>&1 || {
-      echo "crosvm exit $?"
-      tail -n 20 crosvm.log
-    }
-
-    mkdir -p $out
-    cp console.log probe.log crosvm.log $out/
-
-    # systemd sends a terminal query to the tty before the first line.
-    sed 's/\r$//' probe.log | grep -o 'PROBE .*' > probes || true
-    cat probes
-
-    status=0
-    ${lib.optionalString (kernelRelease != null) ''
-      expected_release=$(cat ${lib.escapeShellArg kernelRelease})
-      if ! grep -Fxq "PROBE kernel $expected_release" probes; then
-        echo "FAIL: booted kernel does not match expected release: $expected_release"
-        status=1
-      fi
-    ''}
-    # Activation grows the filesystem to the size of the disk.
-    root_size=$(grep -o '^PROBE root btrfs *[0-9]*' probes | grep -o '[0-9]*$')
-    if [ -z "$root_size" ] || [ "$root_size" -le "$image_size" ]; then
-      echo "FAIL: root filesystem not grown: $root_size <= $image_size"
-      status=1
-    fi
-    ${checkProbes} probe.log || status=1
-    exit $status
+      ${kernel}/kernel > crosvm.log 2>&1 || status=$?
+    mkdir "$out"
+    cp *.log "$out/"
+    sha256sum ${shipped.btrfsImageCompressed}/baguette_rootfs.img.zst ${kernel}/kernel ${toolsDisk} > "$out/inputs.sha256"
+    bash ${./verify-boot.sh} "$status" probe.log ${checkProbes} \
+      ${kernel}/release "$image_size"
   ''

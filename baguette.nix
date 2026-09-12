@@ -291,9 +291,6 @@
         tss = { };
       };
 
-      # NOTE: There's no need to manually create a user here,
-      # since it will be created by `vmc start ...` or equivalent.
-
       systemd = {
         # ChromeOS VM integration services
         mounts = [
@@ -317,47 +314,59 @@
           }
         ];
 
-        services = {
-          vshd = {
-            description = "vshd";
-            after = [ "opt-google-cros\\x2dcontainers.mount" ];
-            requires = [ "opt-google-cros\\x2dcontainers.mount" ];
-            wantedBy = [ "basic.target" ];
+        # Only an explicitly selected account gets the boot-session dependency.
+        services =
+          lib.listToAttrs (
+            map (
+              user:
+              lib.nameValuePair "user@${toString user.uid}" {
+                overrideStrategy = "asDropin";
+                enableDefaultPath = false;
+                requires = [ "opt-google-cros\\x2dcontainers.mount" ];
+                after = [ "opt-google-cros\\x2dcontainers.mount" ];
+              }
+            ) (lib.filter (user: user.crostini.enable) (lib.attrValues config.users.users))
+          )
+          // {
+            vshd = {
+              description = "vshd";
+              after = [ "opt-google-cros\\x2dcontainers.mount" ];
+              requires = [ "opt-google-cros\\x2dcontainers.mount" ];
+              wantedBy = [ "basic.target" ];
 
-            serviceConfig = {
-              ExecStart = "/opt/google/cros-containers/bin/vshd";
+              serviceConfig = {
+                ExecStart = "/opt/google/cros-containers/bin/vshd";
+              };
+            };
+
+            maitred = {
+              description = "maitred";
+              after = [ "opt-google-cros\\x2dcontainers.mount" ];
+              requires = [ "opt-google-cros\\x2dcontainers.mount" ];
+              wantedBy = [ "basic.target" ];
+
+              serviceConfig = {
+                ExecStart = "/opt/google/cros-containers/bin/maitred";
+                Environment = "PATH=/opt/google/cros-containers/bin:/usr/sbin:/usr/bin:/sbin:/bin:/run/current-system/sw/bin";
+              };
+            };
+
+            cros-port-listener = {
+              description = "Chromium OS port listener service";
+              after = [ "opt-google-cros\\x2dcontainers.mount" ];
+              requires = [ "opt-google-cros\\x2dcontainers.mount" ];
+              wantedBy = [ "basic.target" ];
+
+              serviceConfig = {
+                Type = "simple";
+                ExecStart = "/opt/google/cros-containers/bin/port_listener";
+                Restart = "always";
+                # Without a delay, a missing binary restarts in a tight loop
+                # and floods the console until the start limit.
+                RestartSec = 1;
+              };
             };
           };
-
-          maitred = {
-            description = "maitred";
-            after = [ "opt-google-cros\\x2dcontainers.mount" ];
-            requires = [ "opt-google-cros\\x2dcontainers.mount" ];
-            wantedBy = [ "basic.target" ];
-
-            serviceConfig = {
-              ExecStart = "/opt/google/cros-containers/bin/maitred";
-              Environment = "PATH=/opt/google/cros-containers/bin:/usr/sbin:/usr/bin:/sbin:/bin:/run/current-system/sw/bin";
-            };
-          };
-
-          cros-port-listener = {
-            description = "Chromium OS port listener service";
-            after = [ "opt-google-cros\\x2dcontainers.mount" ];
-            requires = [ "opt-google-cros\\x2dcontainers.mount" ];
-            wantedBy = [ "basic.target" ];
-
-            serviceConfig = {
-              Type = "simple";
-              ExecStart = "/opt/google/cros-containers/bin/port_listener";
-              Restart = "always";
-              # Without a delay, a missing binary restarts in a tight loop
-              # and floods the console until the start limit.
-              RestartSec = 1;
-            };
-          };
-
-        };
 
         user.services.cros-notificationd = {
           description = "Chromium OS Notification Server";

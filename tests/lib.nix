@@ -11,12 +11,21 @@
   defaultUser =
     who: configuration:
     let
-      users = lib.attrNames (lib.filterAttrs (_: u: u.isNormalUser) configuration.config.users.users);
+      accounts = lib.attrValues configuration.config.users.users;
+      selected = lib.filter (u: u.crostini.enable) accounts;
+      normal = lib.filter (u: u.isNormalUser) accounts;
+      candidates = if selected != [ ] then selected else normal;
     in
-    if lib.length users == 1 then
-      lib.head users
+    if lib.length candidates == 1 then
+      (lib.head candidates).name
     else
-      throw "${who}: specify user when the image does not have exactly one normal user";
+      throw "${who}: enable crostini.enable for one user, or specify user for a legacy image";
+
+  userAccount =
+    configuration: user:
+    lib.findSingle (account: account.name == user) (throw "No configured user named ${user}")
+      (throw "Multiple configured users named ${user}")
+      (lib.attrValues configuration.config.users.users);
 
   # The start of a probe. `setup` runs before the first check. The
   # shebang is the /bin/sh of NixOS.
