@@ -17,7 +17,22 @@
       dontBuild = true;
       dontUnpack = true;
       installPhase = ''
-        cat $src | base64 -d | tee $out
+        base64 -d < "$src" > "$out"
+        # Interactive shells wait for notify units in interactiveShellInit.
+        # We delete the wait.
+        substituteInPlace "$out" --replace-fail '
+        # Wait until sommelier starts before give the shell to user, max 4 seconds
+        SECONDS=0
+        while ! pgrep -f "sommelier" > /dev/null; do
+          sleep 1
+          SECONDS=$((SECONDS+1))
+          if [[ ''${SECONDS} -ge 4 ]]; then
+            break
+          fi
+        done
+
+        sleep 0.2
+        ' ""
       '';
     };
   in
@@ -61,8 +76,11 @@
             rm /nix-path-registration
           fi
 
-          # nixos-rebuild also requires a "system" profile
-          ${config.nix.package.out}/bin/nix-env -p /nix/var/nix/profiles/system --set /run/current-system
+          # Images already contain the profile. Retain initialization for
+          # tarball installs and update it when booting another generation.
+          if [ "$(readlink -f /nix/var/nix/profiles/system)" != "$(readlink -f /run/current-system)" ]; then
+            ${config.nix.package.out}/bin/nix-env -p /nix/var/nix/profiles/system --set /run/current-system
+          fi
 
           # rely on host for DNS resolution
           ln -sf /run/resolv.conf /etc/resolv.conf
@@ -111,9 +129,21 @@
         # TODO: Remove the extraConfig fallback once NixOS 26.11 ships.
         journald =
           if options.services.journald ? settings then
-            { settings.Journal.ForwardToConsole = true; }
+            {
+              settings.Journal = {
+                ForwardToConsole = true;
+                # ChromeOS captures the serial console in vmc logs. Keep
+                # warnings there and the full journal inside the guest.
+                MaxLevelConsole = lib.mkDefault "warning";
+              };
+            }
           else
-            { extraConfig = "ForwardToConsole=yes"; };
+            {
+              extraConfig = ''
+                ForwardToConsole=yes
+                MaxLevelConsole=warning
+              '';
+            };
 
         # D-Bus service for cros-notificationd activation
         # https://chromium.googlesource.com/chromiumos/containers/cros-container-guest-tools/+/refs/heads/main/cros-notificationd/org.freedesktop.Notifications.service
@@ -132,6 +162,18 @@
 
       # This is a hack to reproduce /etc/profile.d in NixOS
       environment.shellInit = lib.mkBefore ". ${baguette-env}";
+
+      # vsh can open an interactive shell during startup. Wait for actual
+      # READY=1 notifications, not a process-name match or a fixed delay.
+      # Noninteractive activation must be able to run before user services.
+      environment.interactiveShellInit = ''
+        if [ "$(id -u)" -ne 0 ]; then
+          # Keep a diagnostic shell available if graphics cannot start.
+          ${pkgs.coreutils}/bin/timeout 4s systemctl --user start \
+            ${lib.escapeShellArgs config.systemd.user.services.garcon.requires} || true
+          . /etc/profile.d/crostini-sommelier.sh
+        fi
+      '';
 
       system =
         let
@@ -247,6 +289,23 @@
                       echo "Extracting rootfs from tarball into subvolume..."
                       tar -C /mnt/rootfs_subvol -xf ${config.system.build.tarball}/tarball/*.tar
 
+                      # Register with the guest's own Nix version/schema at
+                      # image build time. This can involve thousands of
+                      # SQLite writes on Chromebook storage at first boot.
+                      # A chroot keeps all state and GC-root links at their
+                      # final paths; no builder state or machine identity is
+                      # copied into the image. Tarballs keep their fallback.
+                      mount --bind /dev /mnt/rootfs_subvol/dev
+                      mount -t proc proc /mnt/rootfs_subvol/proc
+                      env -i HOME=/root NIX_REMOTE=local ${pkgs.coreutils}/bin/chroot /mnt/rootfs_subvol \
+                        ${config.nix.package.out}/bin/nix-store --load-db \
+                        < /mnt/rootfs_subvol/nix-path-registration
+                      env -i HOME=/root NIX_REMOTE=local ${pkgs.coreutils}/bin/chroot /mnt/rootfs_subvol \
+                        ${config.nix.package.out}/bin/nix-env -p /nix/var/nix/profiles/system \
+                        --set ${config.system.build.toplevel}
+                      umount /mnt/rootfs_subvol/proc /mnt/rootfs_subvol/dev
+                      rm /mnt/rootfs_subvol/nix-path-registration
+
                       # Get the subvolume ID
                       echo "Getting subvolume ID..."
                       subvol_id=$(btrfs subvolume list /mnt | grep rootfs_subvol | awk '{print $2}')
@@ -292,6 +351,8 @@
       };
 
       systemd = {
+        settings.Manager.ShowStatus = lib.mkDefault "error";
+
         # ChromeOS VM integration services
         mounts = [
           {
@@ -328,6 +389,10 @@
             ) (lib.filter (user: user.crostini.enable) (lib.attrValues config.users.users))
           )
           // {
+            # Shell access comes through vshd. An unattached serial getty
+            # competes with the boot log and probes ChromeOS's console.
+            "serial-getty@".enable = lib.mkDefault false;
+
             vshd = {
               description = "vshd";
               after = [ "opt-google-cros\\x2dcontainers.mount" ];

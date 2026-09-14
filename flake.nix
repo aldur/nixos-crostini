@@ -97,6 +97,7 @@
           baguette-tarball = baguette-nixos.config.system.build.tarball;
           baguette-image = baguette-nixos.config.system.build.btrfsImage;
           baguette-zimage = baguette-nixos.config.system.build.btrfsImageCompressed;
+          baguette-benchmark = self.lib.mkBaguetteBenchmark { configuration = baguette-nixos; };
 
           default = self.packages.${system}.lxc-image-and-metadata;
         }
@@ -123,6 +124,7 @@
       lib = {
         mkBaguetteTest = import ./tests/baguette-boot.nix { inherit (nixpkgs) lib; };
         mkBaguetteSmokeTest = import ./tests/baguette-smoke.nix { inherit (nixpkgs) lib; };
+        mkBaguetteBenchmark = import ./tests/baguette-benchmark.nix { inherit (nixpkgs) lib; };
         mkLxcTest = import ./tests/lxc-boot.nix { inherit (nixpkgs) lib; };
       };
 

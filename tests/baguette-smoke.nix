@@ -228,7 +228,15 @@ pkgs.runCommand name
       pkgs.zstd
     ];
     requiredSystemFeatures = [ "kvm" ];
-    passthru = { inherit probe checkProbes toolsDisk kernel shipped; };
+    passthru = {
+      inherit
+        probe
+        checkProbes
+        toolsDisk
+        kernel
+        shipped
+        ;
+    };
   }
   ''
     # Start from the same compressed artifact distributed to ChromeOS.

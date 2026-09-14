@@ -200,7 +200,15 @@ in
       };
 
       # Load the environment populated from `sommelier`, e.g. `DISPLAY`.
-      shellInit = ". ${cros-container-guest-tools-src}/cros-sommelier/sommelier.sh";
+      shellInit = ". /etc/profile.d/crostini-sommelier.sh";
+      etc."profile.d/crostini-sommelier.sh".text = ''
+        # Noninteractive activation and newly provisioned accounts can run
+        # before the user bus exists. There is no display environment to
+        # import yet; do not print a bus error or wait for the session.
+        if [ -n "''${XDG_RUNTIME_DIR:-}" ] && [ -S "$XDG_RUNTIME_DIR/bus" ]; then
+          . ${cros-container-guest-tools-src}/cros-sommelier/sommelier.sh
+        fi
+      '';
     };
 
     system.activationScripts = {
@@ -355,15 +363,16 @@ in
           };
         };
 
-        targets.default.wants = [
-          "sommelier@0.service"
-          "sommelier@1.service"
-          "sommelier-x@0.service"
-          "sommelier-x@1.service"
-        ];
+        targets.default.wants = config.systemd.user.services.garcon.requires;
 
         services."sommelier@1" = low-density-overrides;
-        services."sommelier-x@1" = low-density-overrides;
+        # Both Xwayland instances allocate a display and update the same
+        # .Xauthority. Starting them together can hit X socket/xauth lock
+        # retries (seconds). Let the first notify before starting the next;
+        # keep automatic display allocation for ChromeOS's @default unit.
+        services."sommelier-x@1" = low-density-overrides // {
+          after = [ "sommelier-x@0.service" ];
+        };
       };
 
       # Suppress a few un-needed daemons
