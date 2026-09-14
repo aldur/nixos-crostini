@@ -353,6 +353,18 @@
       systemd = {
         settings.Manager.ShowStatus = lib.mkDefault "error";
 
+        managerEnvironment = {
+          # Stage 2 and guest services create a burst of mounts. systemd's
+          # default of five mount-table events per second stalls subsequent
+          # mount jobs for a full second, including the ChromeOS tools disk.
+          SYSTEMD_DEFAULT_MOUNT_RATE_LIMIT_BURST = lib.mkDefault "64";
+
+          # ChromeOS captures this console as a log; it cannot answer ANSI
+          # size queries. Set TERM after PID 1's early terminal autodetection.
+          # ManagerEnvironment affects PID 1, not the shells started by vsh.
+          TERM = lib.mkDefault "dumb";
+        };
+
         # ChromeOS VM integration services
         mounts = [
           {
