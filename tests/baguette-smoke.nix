@@ -228,7 +228,7 @@ pkgs.runCommand name
       pkgs.zstd
     ];
     requiredSystemFeatures = [ "kvm" ];
-    passthru = { inherit probe checkProbes toolsDisk; };
+    passthru = { inherit probe checkProbes toolsDisk kernel shipped; };
   }
   ''
     # Start from the same compressed artifact distributed to ChromeOS.
@@ -238,9 +238,18 @@ pkgs.runCommand name
     image_size=$(stat -c %s root.img)
     truncate -s $((image_size + 2 * 1024 * 1024 * 1024)) root.img
     touch console.log probe.log crosvm.log weston.log
+    # Nix shows only the last lines of a failed build. The verdict of
+    # verify-boot.sh must come after the logs, and the console log must
+    # not fill that window on its own.
+    dump_logs() {
+      dumped=1
+      tail -n 200 console.log
+      cat probe.log crosvm.log weston.log
+    }
+    dumped=
     cleanup() {
       kill "$weston" 2>/dev/null || true
-      cat console.log probe.log crosvm.log weston.log
+      [ -n "$dumped" ] || dump_logs
     }
     weston=
     trap cleanup EXIT
@@ -265,6 +274,7 @@ pkgs.runCommand name
       --params "root=/dev/vdb rw init=/sbin/init console=ttyS0" \
       --block path=tools.img --block path=root.img \
       ${kernel}/kernel > crosvm.log 2>&1 || status=$?
+    dump_logs
     mkdir "$out"
     cp *.log "$out/"
     sha256sum ${shipped.btrfsImageCompressed}/baguette_rootfs.img.zst ${kernel}/kernel ${toolsDisk} > "$out/inputs.sha256"
