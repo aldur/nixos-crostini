@@ -44,6 +44,8 @@ def main():
     parser.add_argument("--cpus", type=int, default=2)
     parser.add_argument("--memory", type=int, default=4096, help="Guest MiB")
     parser.add_argument("--timeout", type=int, default=180)
+    parser.add_argument("--kernel-param", action="append", default=[],
+                        help="Extra guest kernel parameter, like vmc start --kernel-param; repeatable")
     args = parser.parse_args()
     if min(args.runs, args.cpus, args.memory, args.timeout) < 1 or args.warm_boots < 0:
         parser.error("Counts must be positive; warm-boots may be zero")
@@ -104,7 +106,8 @@ def main():
                     "--serial", f"type=file,path={directory}/probe.log,hardware=serial,num=2",
                     "--gpu", "backend=virglrenderer,context-types=cross-domain",
                     "--wayland-sock", str(runtime / "wayland-host"),
-                    "--params", "root=/dev/vdb rw init=/sbin/init console=ttyS0",
+                    "--params", " ".join(["root=/dev/vdb rw init=/sbin/init console=ttyS0",
+                                          *args.kernel_param]),
                     "--block", f"path={manifest['tools']},ro=true", "--block", f"path={disk}", manifest["kernel"],
                 ]
                 started = time.monotonic()

@@ -323,6 +323,7 @@ in
               bash # sh
               xauth
               tinyxxd
+              util-linux # flock
             ];
             serviceConfig = {
               Type = "notify";
@@ -346,7 +347,7 @@ in
                        systemctl --user set-environment ''${XCURSOR_SIZE_VAR}=$''${XCURSOR_SIZE}; \
                        systemctl --user import-environment SOMMELIER_VERSION; \
                        touch ''${HOME}/.Xauthority; \
-                       xauth -f ''${HOME}/.Xauthority add $''${DISPLAY} . $(xxd -l 16 -p /dev/urandom); \
+                       flock ''${XDG_RUNTIME_DIR}/sommelier-xauth.lock xauth -f ''${HOME}/.Xauthority add $''${DISPLAY} . $(xxd -l 16 -p /dev/urandom); \
                        . /etc/sommelierrc"
               '';
               ExecStopPost = "/opt/google/cros-containers/bin/guest_service_failure_notifier sommelier-x";
@@ -366,13 +367,10 @@ in
         targets.default.wants = config.systemd.user.services.garcon.requires;
 
         services."sommelier@1" = low-density-overrides;
-        # Both Xwayland instances allocate a display and update the same
-        # .Xauthority. Starting them together can hit X socket/xauth lock
-        # retries (seconds). Let the first notify before starting the next;
-        # keep automatic display allocation for ChromeOS's @default unit.
-        services."sommelier-x@1" = low-density-overrides // {
-          after = [ "sommelier-x@0.service" ];
-        };
+        # Xwayland allocates free displays concurrently. Serialize only the
+        # shared .Xauthority update in the template, including @default,
+        # to avoid xauth's multi-second lock retry between these instances.
+        services."sommelier-x@1" = low-density-overrides;
       };
 
       # Suppress a few un-needed daemons
