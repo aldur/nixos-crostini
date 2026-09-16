@@ -167,6 +167,16 @@ in
       };
 
       etc = {
+        # Leave XCURSOR_SIZE to Sommelier's display scaling.
+        "environment.d/60-crostini-ui.conf" = lib.mkIf config.crostini.ui.enable {
+          text = ''
+            GTK2_RC_FILES=''${GTK2_RC_FILES:-/etc/gtk-2.0/gtkrc}
+            GTK_DATA_PREFIX=''${GTK_DATA_PREFIX:-/run/current-system/sw}
+            XCURSOR_THEME=''${XCURSOR_THEME:-Adwaita}
+            XCURSOR_PATH=''${XCURSOR_PATH:-$HOME/.icons:$HOME/.local/share/icons}:/run/current-system/sw/share/icons
+          '';
+        };
+
         # Required because `tremplin` will look for it.
         # Without it, `vmc start termina <container>` will fail.
         "gshadow" = {
@@ -188,6 +198,7 @@ in
           text = ''
             gtk-icon-theme-name = "Adwaita"
             gtk-theme-name = "Adwaita"
+            gtk-cursor-theme-name = "Adwaita"
           '';
         };
         "xdg/gtk-3.0/settings.ini" = lib.mkIf config.crostini.ui.enable {
@@ -195,6 +206,7 @@ in
             [Settings]
             gtk-icon-theme-name = Adwaita
             gtk-theme-name = CrosAdapta
+            gtk-cursor-theme-name = Adwaita
           '';
         };
       };
@@ -236,6 +248,7 @@ in
       # garcon needs the first, the UI integration the second.
       mime.enable = true;
       icons.enable = true;
+      icons.fallbackCursorThemes = lib.mkIf config.crostini.ui.enable [ "Adwaita" ];
 
       # Taken from https://aur.archlinux.org/packages/cros-container-guest-tools-git
       mime.defaultApplications = {
