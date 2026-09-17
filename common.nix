@@ -41,6 +41,7 @@ let
   '';
 
   low-density-overrides = {
+    restartIfChanged = false;
     environment = {
       DISPLAY_VAR = "DISPLAY_LOW_DENSITY";
       WAYLAND_DISPLAY_VAR = "WAYLAND_DISPLAY_LOW_DENSITY";
@@ -265,6 +266,9 @@ in
         services = {
           garcon = {
             description = "Chromium OS Garcon Bridge";
+            # Restarting the bridge kills the terminals/applications it owns.
+            # Apply changed service settings at the next session/VM restart.
+            restartIfChanged = false;
             # Other accounts can use the displays without registering a
             # second garcon session when a diagnostic login is opened.
             unitConfig.ConditionUser = lib.mkIf (user != null) user.name;
@@ -302,6 +306,8 @@ in
 
           "sommelier@" = {
             description = "Parent sommelier listening on socket wayland-%i";
+            # Display-server restarts disconnect all attached GUI clients.
+            restartIfChanged = false;
             path = with pkgs; [
               systemd # systemctl
               bash # sh
@@ -331,6 +337,7 @@ in
 
           "sommelier-x@" = {
             description = "Parent sommelier listening on socket wayland-%i";
+            restartIfChanged = false;
             path = with pkgs; [
               systemd # systemctl
               bash # sh

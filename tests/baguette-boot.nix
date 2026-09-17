@@ -201,12 +201,18 @@ let
       '';
 
   # A second generation, for a switch from inside the guest. Its X11
-  # sommelier template differs from the one of the image, so the switch
-  # restarts every X instance under the live session, as an update of the
-  # module does on ChromeOS.
+  # sommelier template, garcon and user-manager drop-in differ from the image.
+  # Activation must reload their definitions while preserving live sessions.
   nextStableScaling = !configuration.config.crostini.sommelier.stableScaling;
   nextGeneration = configuration.extendModules {
-    modules = [ { crostini.sommelier.stableScaling = lib.mkForce nextStableScaling; } ];
+    modules = [
+      {
+        crostini.sommelier.stableScaling = lib.mkForce nextStableScaling;
+        systemd.services."user@${toString (shared.userAccount configuration user).uid}".environment.CROSTINI_REBUILD_TEST =
+          "next";
+        systemd.user.services.garcon.environment.CROSTINI_REBUILD_TEST = "next";
+      }
+    ];
   };
   nextToplevel = nextGeneration.config.system.build.toplevel;
   nextClosure = pkgs.closureInfo { rootPaths = [ nextToplevel ]; };
@@ -424,9 +430,9 @@ let
 
     # ChromeOS starts a third X instance, `sommelier-x@default`, outside
     # default.target. Like instance 0, it lets Xwayland pick a display
-    # number. A switch restarts all the instances at once. In the worst
+    # number. A manual restart starts all the instances at once. In the worst
     # order, the two pickers hold :0 and :1 before instance 1 starts.
-    # Reproduce that order, then a joint restart like the one of a switch.
+    # Reproduce that order, then a joint restart.
     as_user systemctl --user stop $x_units
     as_user systemctl --user start sommelier-x@default.service sommelier-x@0.service
     as_user systemctl --user start sommelier-x@1.service || true
@@ -469,11 +475,21 @@ let
 
     # A switch from inside the guest, as `nixos-rebuild switch` does: it
     # registers the paths of the new generation, sets the system profile,
-    # and runs the switch script. The three X instances of each manager
-    # run under the live session, and the switch restarts them all.
+    # and runs the switch script. The running user manager, bridge and
+    # displays must retain their invocation IDs even when definitions change.
+    session_invocations() {
+      systemctl show "user@$(id -u "$user").service" -p InvocationID --value
+      as_user systemctl --user show garcon.service -p InvocationID --value
+      for manager in as_user as_root as_vmc; do
+        $manager systemctl --user show sommelier@0.service sommelier@1.service $x_units -p InvocationID --value
+      done
+    }
+    session_invocations > /tmp/session-before-switch
     nix-store --load-db < $probe/next-registration
     echo "PROBE profile-set $(nix-env -p /nix/var/nix/profiles/system --set ${nextToplevel} 2>&1 && echo ok || echo fail) $(readlink -f /nix/var/nix/profiles/system)"
     ${shared.switchProbe nextToplevel}
+    session_invocations > /tmp/session-after-switch
+    echo "PROBE switch-session-preserved $(${lib.getExe' pkgs.diffutils "cmp"} -s /tmp/session-before-switch /tmp/session-after-switch && echo yes || echo no)"
     echo "PROBE switch-user-failed [$(failed_units as_user systemctl --user)]"
     echo "PROBE switch-template stable-scaling=$(as_user systemctl --user show sommelier-x@0.service -p ExecStart --value | grep -q -- --stable-scaling && echo yes || echo no)"
     echo "PROBE switch-x $(x_state as_user)"
@@ -641,9 +657,9 @@ let
       "root-x ${xState}"
       "root-user-x ${xState}"
       "switch-root-x ${xState}"
-      # The switch restarts the sommelier instances with the new template,
-      # and the user manager ends with no failed unit.
+      # The switch installs the new definitions without restarting sessions.
       "profile-set ok ${nextToplevel}$"
+      "switch-session-preserved yes$"
       "switch-user-failed \\[ *\\]"
       "switch-template stable-scaling=${if nextStableScaling then "yes" else "no"}$"
       "switch-x ${xState}"

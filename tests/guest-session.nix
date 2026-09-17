@@ -86,6 +86,13 @@ let
     "sommelier-x@1.service"
   ];
   mount = "opt-google-cros\\x2dcontainers.mount";
+  sessionServices = [
+    "garcon"
+    "sommelier@"
+    "sommelier@1"
+    "sommelier-x@"
+    "sommelier-x@1"
+  ];
   shared = import ./lib.nix { inherit lib; };
 in
 assert failures valid == [ ];
@@ -98,6 +105,16 @@ assert lib.all (group: lib.elem group valid.users.users.alice.extraGroups) [
   "video"
 ];
 assert valid.systemd.services."user@1000".overrideStrategy == "asDropin";
+assert !valid.systemd.services."user@1000".restartIfChanged;
+assert !customUid.systemd.services."user@1234".restartIfChanged;
+assert lib.all
+  (c: lib.all (name: !c.systemd.user.services.${name}.restartIfChanged) sessionServices)
+  [
+    valid
+    customUid
+    legacyLxc
+    (make ../crostini.nix [ settings ])
+  ];
 assert lib.elem mount valid.systemd.services."user@1000".requires;
 assert lib.elem mount valid.systemd.services."user@1000".after;
 assert lib.elem mount customUid.systemd.services."user@1234".after;

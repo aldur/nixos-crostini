@@ -394,6 +394,9 @@
               user:
               lib.nameValuePair "user@${toString user.uid}" {
                 overrideStrategy = "asDropin";
+                # This overrides.conf shadows the template's drop-in,
+                # including NixOS's policy to preserve the live user manager.
+                restartIfChanged = false;
                 enableDefaultPath = false;
                 requires = [ "opt-google-cros\\x2dcontainers.mount" ];
                 after = [ "opt-google-cros\\x2dcontainers.mount" ];
