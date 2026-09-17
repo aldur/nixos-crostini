@@ -477,19 +477,39 @@ let
     # registers the paths of the new generation, sets the system profile,
     # and runs the switch script. The running user manager, bridge and
     # displays must retain their invocation IDs even when definitions change.
+    # Stopping the X units above also stops garcon through Requires=.
+    # Start it again so the baseline covers a live bridge.
+    as_user systemctl --user start garcon.service || exit 1
+    session_invocation() {
+      local unit=$1 invocation
+      shift
+      if ! "$@" is-active --quiet "$unit"; then
+        echo "Session service is not active: $* $unit" >&2
+        return 1
+      fi
+      invocation=$("$@" show "$unit" -p InvocationID --value) || return 1
+      [ -n "$invocation" ] || return 1
+      echo "$* $unit $invocation"
+    }
     session_invocations() {
-      systemctl show "user@$(id -u "$user").service" -p InvocationID --value
-      as_user systemctl --user show garcon.service -p InvocationID --value
+      session_invocation "user@$(id -u "$user").service" systemctl || return 1
+      session_invocation garcon.service as_user systemctl --user || return 1
       for manager in as_user as_root as_vmc; do
-        $manager systemctl --user show sommelier@0.service sommelier@1.service $x_units -p InvocationID --value
+        for unit in sommelier@0.service sommelier@1.service $x_units; do
+          session_invocation "$unit" $manager systemctl --user || return 1
+        done
       done
     }
-    session_invocations > /tmp/session-before-switch
+    session_invocations > /tmp/session-before-switch || exit 1
     nix-store --load-db < $probe/next-registration
     echo "PROBE profile-set $(nix-env -p /nix/var/nix/profiles/system --set ${nextToplevel} 2>&1 && echo ok || echo fail) $(readlink -f /nix/var/nix/profiles/system)"
     ${shared.switchProbe nextToplevel}
-    session_invocations > /tmp/session-after-switch
-    echo "PROBE switch-session-preserved $(${lib.getExe' pkgs.diffutils "cmp"} -s /tmp/session-before-switch /tmp/session-after-switch && echo yes || echo no)"
+    session_invocations > /tmp/session-after-switch || exit 1
+    if ${lib.getExe' pkgs.diffutils "diff"} -u /tmp/session-before-switch /tmp/session-after-switch; then
+      echo "PROBE switch-session-preserved yes"
+    else
+      echo "PROBE switch-session-preserved no"
+    fi
     echo "PROBE switch-user-failed [$(failed_units as_user systemctl --user)]"
     echo "PROBE switch-template stable-scaling=$(as_user systemctl --user show sommelier-x@0.service -p ExecStart --value | grep -q -- --stable-scaling && echo yes || echo no)"
     echo "PROBE switch-x $(x_state as_user)"
