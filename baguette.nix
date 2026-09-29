@@ -10,14 +10,14 @@
   let
     baguette-env = pkgs.stdenv.mkDerivation {
       name = "10-baguette-envs.sh";
-      src = pkgs.fetchurl {
-        url = "https://chromium.googlesource.com/chromiumos/platform2/+/051c972a75c15d38c7bab7ac017c7550ca6c24f5/vm_tools/baguette_image/src/data/etc/profile.d/10-baguette-envs.sh?format=TEXT";
-        hash = "sha256-/poJYX0S7/ni8OJEI3PfBmUtWy8x5WzSnT3MMOEiuoI=";
-      };
+      # Vendored from chromiumos/platform2 at
+      # 051c972a75c15d38c7bab7ac017c7550ca6c24f5. Keeping this tiny pinned
+      # file in-tree avoids making every image build depend on Gitiles.
+      src = ./third_party/chromiumos-platform2/10-baguette-envs.sh;
       dontBuild = true;
       dontUnpack = true;
       installPhase = ''
-        base64 -d < "$src" > "$out"
+        cp "$src" "$out"
         # Interactive shells wait for notify units in interactiveShellInit.
         # We delete the wait.
         substituteInPlace "$out" --replace-fail '
