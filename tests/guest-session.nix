@@ -25,6 +25,29 @@ let
     };
   };
   valid = make ../baguette.nix [ settings ];
+  minimalSettings.crostini = {
+    sommelier.xwayland.enable = false;
+    extraTools.enable = false;
+  };
+  minimal = make ../baguette.nix [
+    settings
+    minimalSettings
+    {
+      baguette.portListener.enable = false;
+      baguette.notifications.enable = false;
+    }
+  ];
+  minimalLxc = make ../crostini.nix [
+    settings
+    minimalSettings
+  ];
+  reenabled = make ../baguette.nix [
+    settings
+    {
+      boot.kexec.enable = true;
+      services.timesyncd.enable = true;
+    }
+  ];
   customUid = make ../baguette.nix [
     settings
     { users.users.alice.uid = 1234; }
@@ -96,6 +119,51 @@ let
   shared = import ./lib.nix { inherit lib; };
 in
 assert failures valid == [ ];
+assert !valid.baguette.ephemeralRoot.persistMachineId;
+assert !valid.services.timesyncd.enable;
+assert !valid.boot.kexec.enable;
+assert !(valid.systemd.services ? prepare-kexec);
+assert !(lib.elem pkgs.kexec-tools valid.environment.systemPackages);
+assert reenabled.services.timesyncd.enable && reenabled.boot.kexec.enable;
+assert valid.baguette.portListener.enable && valid.baguette.notifications.enable;
+assert valid.systemd.services.cros-port-listener.enable;
+assert valid.systemd.user.services.cros-notificationd.enable;
+assert valid.crostini.sommelier.xwayland.enable && valid.crostini.extraTools.enable;
+assert lib.all (c: failures c == [ ]) [
+  minimal
+  minimalLxc
+];
+assert !(minimal.systemd.services ? cros-port-listener);
+assert !(minimal.systemd.user.services ? cros-notificationd);
+assert lib.length valid.services.dbus.packages == lib.length minimal.services.dbus.packages + 1;
+assert lib.all
+  (
+    c:
+    c.systemd.user.services.garcon.requires == [
+      "sommelier@0.service"
+      "sommelier@1.service"
+    ]
+    && c.systemd.user.services.garcon.after == c.systemd.user.services.garcon.requires
+    && c.systemd.user.targets.default.wants == c.systemd.user.services.garcon.requires
+    && !(c.systemd.user.units ? "sommelier-x@.service")
+    && !(c.systemd.user.units ? "sommelier-x@1.service")
+    && !(c.system.activationScripts ? xkb)
+    && !(c.environment.etc ? sommelierrc)
+    && lib.all (package: !(lib.elem package c.environment.systemPackages)) [
+      pkgs.wl-clipboard
+      pkgs.xdg-utils
+      pkgs.usbutils
+    ]
+  )
+  [
+    minimal
+    minimalLxc
+  ];
+assert lib.all (package: lib.elem package valid.environment.systemPackages) [
+  pkgs.wl-clipboard
+  pkgs.xdg-utils
+  pkgs.usbutils
+];
 assert sessionWarnings valid == [ ];
 assert valid.users.users.alice.linger;
 assert valid.users.users.alice.uid == 1000;
@@ -103,7 +171,11 @@ assert valid.users.users.bob.linger != true;
 assert lib.all (group: lib.elem group valid.users.users.alice.extraGroups) [
   "render"
   "video"
+  "virtwl"
 ];
+assert !(lib.elem "virtwl" valid.users.users.bob.extraGroups);
+assert valid.users.groups ? virtwl;
+assert lib.hasInfix ''KERNEL=="wl*", GROUP="virtwl", MODE="0660"'' valid.services.udev.extraRules;
 assert valid.systemd.services."user@1000".overrideStrategy == "asDropin";
 assert !valid.systemd.services."user@1000".restartIfChanged;
 assert !customUid.systemd.services."user@1234".restartIfChanged;

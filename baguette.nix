@@ -15,7 +15,8 @@
       "lowerdir=/run/ephemeral/lower"
       "upperdir=/run/ephemeral/upper"
       "workdir=/run/ephemeral/work"
-    ];
+    ]
+    ++ ephemeral.mountOptions;
     # Without an initrd, `init` is stage 2. A systemd initrd uses
     # `prepare-root` instead, leaving `init` for systemd itself.
     initScript =
@@ -28,8 +29,10 @@
         coreutils = pkgs.coreutils;
         utilLinux = pkgs.util-linux;
         btrfs = pkgs.btrfs-progs;
+        systemd = config.systemd.package;
+        persistMachineId = lib.boolToString ephemeral.persistMachineId;
         tmpfsSize = ephemeral.tmpfsSize;
-        overlayOptions = lib.concatStringsSep "," overlayOptions;
+        overlayOptions = lib.escapeShellArg (lib.concatStringsSep "," overlayOptions);
         earlyMountScript = config.system.build.earlyMountScript;
         stage2 = initScript;
         systemConfig = null; # Filled in by the toplevel builder.
@@ -76,6 +79,29 @@
       baguette.ephemeralRoot = {
         enable = mkEnableOption "a fresh Baguette root at each boot, with root writes in RAM";
 
+        persistMachineId = mkEnableOption "a stable machine ID on the state volume" // {
+          description = ''
+            Keep the machine ID in the persistent state subvolume's machine-id
+            file, generating it on first boot. The pre-init copies it into
+            the overlay's /etc/machine-id before systemd starts. Only applies
+            when ephemeralRoot.enable is true.
+          '';
+        };
+
+        mountOptions = mkOption {
+          type = types.listOf types.str;
+          default = [ ];
+          example = [
+            "nosuid"
+            "nodev"
+          ];
+          description = ''
+            Extra options passed when the overlay root is first mounted,
+            before systemd starts. Overlayfs options cannot be applied by
+            remounting the root through fstab.
+          '';
+        };
+
         stateMountPoint = mkOption {
           type = types.strMatching "/.+";
           default = "/state";
@@ -94,6 +120,14 @@
             of RAM. Writes fail with ENOSPC when the tmpfs is full.
           '';
         };
+      };
+
+      baguette.portListener.enable = mkEnableOption "advertising guest listening ports to ChromeOS" // {
+        default = true;
+      };
+
+      baguette.notifications.enable = mkEnableOption "forwarding guest notifications to ChromeOS" // {
+        default = true;
       };
 
       virtualisation.buildMemorySize = mkOption {
@@ -193,10 +227,10 @@
       services.timesyncd.enable = lib.mkDefault false;
 
       services = {
-        # Add rw permissions to group and others for /dev/wl0
+        # Restrict host compositor access to the virtwl group.
         # https://chromium.googlesource.com/chromiumos/containers/cros-container-guest-tools/+/6d62810ff0231fbccbc1b0279e695842d88d6c5c/cros-wayland/10-cros-virtwl.rules
         udev.extraRules = ''
-          KERNEL=="wl*", MODE="0666"
+          KERNEL=="wl*", GROUP="virtwl", MODE="0660"
         '';
 
         # https://chromium.googlesource.com/chromiumos/platform2/+/HEAD/vm_tools/baguette_image/src/data/usr/local/lib/systemd/journald.conf.d/50-console.conf?autodive=0%2F%2F%2F
@@ -221,7 +255,7 @@
 
         # D-Bus service for cros-notificationd activation
         # https://chromium.googlesource.com/chromiumos/containers/cros-container-guest-tools/+/refs/heads/main/cros-notificationd/org.freedesktop.Notifications.service
-        dbus.packages = [
+        dbus.packages = lib.mkIf config.baguette.notifications.enable [
           (pkgs.writeTextDir "share/dbus-1/services/org.freedesktop.Notifications.service" ''
             [D-BUS Service]
             Name=org.freedesktop.Notifications
@@ -537,7 +571,7 @@
               };
             };
 
-            cros-port-listener = {
+            cros-port-listener = lib.mkIf config.baguette.portListener.enable {
               description = "Chromium OS port listener service";
               after = [ "opt-google-cros\\x2dcontainers.mount" ];
               requires = [ "opt-google-cros\\x2dcontainers.mount" ];
@@ -554,7 +588,7 @@
             };
           };
 
-        user.services.cros-notificationd = {
+        user.services.cros-notificationd = lib.mkIf config.baguette.notifications.enable {
           description = "Chromium OS Notification Server";
           after = [ "opt-google-cros\\x2dcontainers.mount" ];
 

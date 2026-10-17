@@ -7,8 +7,17 @@ let
       {
         baguette.ephemeralRoot = {
           enable = true;
+          persistMachineId = true;
           tmpfsSize = "128M";
+          mountOptions = [
+            "nosuid"
+            "nodev"
+          ];
         };
+        baguette.portListener.enable = false;
+        baguette.notifications.enable = false;
+        crostini.sommelier.xwayland.enable = false;
+        crostini.extraTools.enable = false;
       }
     ];
   };
@@ -18,6 +27,12 @@ let
     test "$(findmnt -n -o FSTYPE /)" = overlay
     test "$(findmnt -n -o FSTYPE -T /run/ephemeral/upper)" = tmpfs
     test "$(findmnt -n -b -o SIZE -T /run/ephemeral/upper)" = 134217728
+    for option in nosuid nodev; do
+      case ",$(findmnt -n -o VFS-OPTIONS /)," in
+        *,"$option",*) ;;
+        *) echo "FAIL: overlay root is missing $option"; exit 1 ;;
+      esac
+    done
     case ",$(findmnt -n -o VFS-OPTIONS /run/ephemeral/lower)," in
       *,ro,*) ;;
       *) exit 1 ;;
@@ -29,6 +44,35 @@ let
     test "$(btrfs property get -ts /run/ephemeral/lower ro)" = ro=true
     test "$(btrfs subvolume list /state | sed 's/.* path //' | sort)" = "$(printf 'rootfs_subvol\nstate')"
     echo 'PROBE ephemeral mounts'
+
+    machine_id=$(cat /etc/machine-id)
+    [[ "$machine_id" =~ ^[0-9a-f]{32}$ && "$machine_id" != 00000000000000000000000000000000 ]]
+    test "$(cat /state/machine-id)" = "$machine_id"
+    test "$(stat -c '%U %G %a' /state/machine-id)" = 'root root 444'
+    test "$(busctl call org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.DBus.Peer GetMachineId)" = "s \"$machine_id\""
+    test ! -s /run/ephemeral/lower/etc/machine-id
+    echo 'PROBE ephemeral machine-id seeded'
+
+    test "$(systemctl show -p LoadState --value cros-port-listener.service)" = not-found
+    test "$(as_user systemctl --user show -p LoadState --value cros-notificationd.service)" = not-found
+    if as_user busctl --user list --activatable --no-legend | grep -q '^org.freedesktop.Notifications '; then
+      echo 'FAIL: ChromeOS notifications are still activatable'
+      exit 1
+    fi
+    for unit in sommelier-x@0.service sommelier-x@1.service; do
+      test "$(as_user systemctl --user show -p LoadState --value "$unit")" = not-found
+    done
+    if compgen -G '/tmp/.X11-unix/X*' || pgrep -x Xwayland; then
+      echo 'FAIL: X11 is running in the Wayland-only guest'
+      exit 1
+    fi
+    for tool in xdg-open wl-copy lsusb; do
+      if command -v "$tool"; then
+        echo "FAIL: optional tool $tool is installed"
+        exit 1
+      fi
+    done
+    echo 'PROBE minimal wayland-only ports=off notifications=off tools=off'
   '';
 in
 import ./baguette-smoke.nix { inherit lib; } {
@@ -36,6 +80,7 @@ import ./baguette-smoke.nix { inherit lib; } {
   name = "baguette-ephemeral";
   reboots = 1;
   extraProbe = mounts + ''
+    cp /etc/machine-id /state/first-boot-machine-id
     echo transient > /etc/ephemeral-test
     echo transient > /root/ephemeral-test
     echo transient > /nix/var/ephemeral-test
@@ -74,6 +119,8 @@ import ./baguette-smoke.nix { inherit lib; } {
   '';
   extraChecks = [
     "ephemeral mounts$"
+    "ephemeral machine-id seeded$"
+    "minimal wayland-only ports=off notifications=off tools=off$"
     "ephemeral isolated-writes$"
     "ephemeral first-boot$"
   ];
@@ -87,11 +134,16 @@ import ./baguette-smoke.nix { inherit lib; } {
     as_user systemctl --user is-active --quiet default.target
     test ! -e /state/user-unit/ran
     test "$(cat /state/ephemeral-test)" = persistent
+    cmp /etc/machine-id /state/first-boot-machine-id
+    echo 'PROBE ephemeral machine-id stable'
     echo 'PROBE ephemeral reset'
     echo 'PROBE ephemeral persisted'
   '';
   secondChecks = [
     "ephemeral mounts$"
+    "ephemeral machine-id seeded$"
+    "ephemeral machine-id stable$"
+    "minimal wayland-only ports=off notifications=off tools=off$"
     "ephemeral reset$"
     "ephemeral persisted$"
   ];

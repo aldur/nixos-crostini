@@ -22,6 +22,26 @@ set -euo pipefail
 if [ ! -e /run/btrfs/state ]; then
   @btrfs@/bin/btrfs subvolume create /run/btrfs/state
 fi
+
+if @persistMachineId@; then
+  machine_id_file=/run/btrfs/state/machine-id
+  if [ ! -s "$machine_id_file" ]; then
+    # Generate per state volume, never in the distributable root image.
+    # Publish atomically so an interrupted write cannot leave a partial ID.
+    machine_id_tmp=$(@coreutils@/bin/mktemp /run/btrfs/state/.machine-id.XXXXXX)
+    @systemd@/bin/systemd-id128 new > "$machine_id_tmp"
+    @coreutils@/bin/chmod 0444 "$machine_id_tmp"
+    @coreutils@/bin/sync -f "$machine_id_tmp"
+    @coreutils@/bin/mv -T "$machine_id_tmp" "$machine_id_file"
+  fi
+  machine_id=$(@coreutils@/bin/cat "$machine_id_file")
+  if [[ ! "$machine_id" =~ ^[0-9a-f]{32}$ || "$machine_id" == 00000000000000000000000000000000 ]]; then
+    echo 'Invalid machine-id in the persistent state subvolume' >&2
+    exit 1
+  fi
+  # This must precede stage 2: systemd caches the ID at startup.
+  @coreutils@/bin/install -D -m 0444 "$machine_id_file" /run/newroot/etc/machine-id
+fi
 @utilLinux@/bin/umount /run/btrfs
 
 # Mount NixOS's early filesystems here so stage 2 does not hide

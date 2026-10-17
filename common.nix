@@ -69,6 +69,7 @@ in
               extraGroups = [
                 "video"
                 "render"
+                "virtwl"
               ];
             };
           }
@@ -77,6 +78,15 @@ in
     };
 
     crostini = {
+      sommelier.xwayland.enable = lib.mkEnableOption "X11 forwarding through Xwayland" // {
+        default = true;
+        description = ''
+          Start the X11 sommelier instances alongside the Wayland instances
+          and install their X11 helpers. Disable for a Wayland-only session.
+          The Xwayland executable itself comes from the ChromeOS tools disk.
+        '';
+      };
+
       sommelier.stableScaling = lib.mkEnableOption "`--stable-scaling` for the X11 sommelier" // {
         description = ''
           Pass `--stable-scaling` to the X11 sommelier, as the ChromeOS
@@ -103,6 +113,10 @@ in
         description = ''
           The package with the Adwaita theme under `share/icons/Adwaita`. 
         '';
+      };
+
+      extraTools.enable = lib.mkEnableOption "the xdg-utils, wl-clipboard and usbutils tools" // {
+        default = true;
       };
     };
   };
@@ -145,10 +159,13 @@ in
       };
     };
 
+    users.groups.virtwl = { };
+
     environment = {
       systemPackages = [
         cros-container-guest-tools
-
+      ]
+      ++ lib.optionals config.crostini.extraTools.enable [
         pkgs.wl-clipboard # wl-copy / wl-paste
         pkgs.xdg-utils # xdg-open
         pkgs.usbutils # lsusb
@@ -187,7 +204,7 @@ in
         };
 
         # TODO: Even empty, this will stop `sommelier` from erroring out.
-        "sommelierrc" = {
+        "sommelierrc" = lib.mkIf config.crostini.sommelier.xwayland.enable {
           mode = "0644";
           text = ''
             exit 0
@@ -233,7 +250,7 @@ in
       # Same for the `sftp-server` launched by `garcon`.
       #
       # These are ugly HACKs, but they work
-      xkb = ''
+      xkb = lib.mkIf config.crostini.sommelier.xwayland.enable ''
         mkdir -p /usr/share/
         ln -sf ${pkgs.xkeyboard_config}/share/X11/ /usr/share/
       '';
@@ -278,6 +295,8 @@ in
             requires = [
               "sommelier@0.service"
               "sommelier@1.service"
+            ]
+            ++ lib.optionals config.crostini.sommelier.xwayland.enable [
               "sommelier-x@0.service"
               "sommelier-x@1.service"
             ];
@@ -335,7 +354,7 @@ in
             };
           };
 
-          "sommelier-x@" = {
+          "sommelier-x@" = lib.mkIf config.crostini.sommelier.xwayland.enable {
             description = "Parent sommelier listening on socket wayland-%i";
             restartIfChanged = false;
             path = with pkgs; [
@@ -390,7 +409,7 @@ in
         # Xwayland allocates free displays concurrently. Serialize only the
         # shared .Xauthority update in the template, including @default,
         # to avoid xauth's multi-second lock retry between these instances.
-        services."sommelier-x@1" = low-density-overrides;
+        services."sommelier-x@1" = lib.mkIf config.crostini.sommelier.xwayland.enable low-density-overrides;
       };
 
       # Suppress a few un-needed daemons

@@ -51,6 +51,8 @@ let
     "garcon.service"
     "sommelier@0.service"
     "sommelier@1.service"
+  ]
+  ++ lib.optionals cfg.crostini.sommelier.xwayland.enable [
     "sommelier-x@0.service"
     "sommelier-x@1.service"
   ];
@@ -104,6 +106,21 @@ let
         }
         echo "PROBE unit $unit active"
       done
+      echo "PROBE unit systemd-timesyncd.service $(systemctl is-active systemd-timesyncd.service || true)"
+
+      # Exercise the real virtio-wl node, including udev's ownership/mode and
+      # the user's supplementary groups. An unrelated uid must get EACCES.
+      device=/dev/wl0
+      test -c "$device"
+      test "$(stat -c '%U %G %a' "$device")" = 'root virtwl 660'
+      as_user bash -c 'exec 3<> "$1"' bash "$device"
+      if setpriv --reuid nobody --regid nogroup --clear-groups \
+        bash -c 'exec 3<> "$1"' bash "$device" 2>/tmp/virtwl-denied; then
+        echo 'FAIL: an unrelated uid can open the compositor device'
+        exit 1
+      fi
+      grep -q 'Permission denied' /tmp/virtwl-denied
+      echo 'PROBE virtwl user=allowed other=denied'
       echo "PROBE user $(id "$user")"
       echo "PROBE kernel $(uname -r)"
       echo "PROBE home $(stat -c '%U %a' ${lib.escapeShellArg account.home})"
@@ -137,6 +154,8 @@ let
     rootPaths = [
       sommelier
       pkgs.mesa
+    ]
+    ++ lib.optionals cfg.crostini.sommelier.xwayland.enable [
       xwayland
       pkgs.xkbcomp
     ];
@@ -158,8 +177,10 @@ let
         cat > root/bin/garcon <<'EOF'
         #!/bin/sh
         set -eu
-        test -n "$DISPLAY"
-        test -n "$DISPLAY_LOW_DENSITY"
+        ${lib.optionalString cfg.crostini.sommelier.xwayland.enable ''
+          test -n "$DISPLAY"
+          test -n "$DISPLAY_LOW_DENSITY"
+        ''}
         test "$WAYLAND_DISPLAY" = wayland-0
         test "$WAYLAND_DISPLAY_LOW_DENSITY" = wayland-1
         exec /run/current-system/sw/bin/sleep infinity
@@ -188,9 +209,11 @@ let
           libs=$libs:/opt/google/cros-containers/lib/$(basename "$path")
         done
         cp ${sommelier}/bin/sommelier root/bin/sommelier-bin
-        cp ${xwayland}/bin/Xwayland root/bin/Xwayland-bin
-        cp ${pkgs.xkbcomp}/bin/xkbcomp root/bin/xkbcomp
-        cp -r ${xfonts} root/fonts
+        ${lib.optionalString cfg.crostini.sommelier.xwayland.enable ''
+          cp ${xwayland}/bin/Xwayland root/bin/Xwayland-bin
+          cp ${pkgs.xkbcomp}/bin/xkbcomp root/bin/xkbcomp
+          cp -r ${xfonts} root/fonts
+        ''}
         cat > root/bin/sommelier <<EOF
         #!/run/current-system/sw/bin/bash
         export LD_LIBRARY_PATH=''${libs#:}
@@ -200,13 +223,15 @@ let
         export SOMMELIER_XFONT_PATH=/opt/google/cros-containers/fonts/misc
         exec -a /opt/google/cros-containers/bin/sommelier /opt/google/cros-containers/bin/sommelier-bin --virtgpu-channel "\$@"
         EOF
-        cat > root/bin/Xwayland <<EOF
-        #!/bin/sh
-        export LD_LIBRARY_PATH=''${libs#:}
-        exec /opt/google/cros-containers/bin/Xwayland-bin "\$@"
-        EOF
+        ${lib.optionalString cfg.crostini.sommelier.xwayland.enable ''
+          cat > root/bin/Xwayland <<EOF
+          #!/bin/sh
+          export LD_LIBRARY_PATH=''${libs#:}
+          exec /opt/google/cros-containers/bin/Xwayland-bin "\$@"
+          EOF
+        ''}
         chmod 0755 root/bin/*
-        for wrapper in maitred garcon sommelier Xwayland; do
+        for wrapper in maitred garcon sommelier ${lib.optionalString cfg.crostini.sommelier.xwayland.enable "Xwayland"}; do
           bash -n root/bin/$wrapper
         done
         install -m 0755 ${probe} root/probe/probe.sh
@@ -226,6 +251,8 @@ let
       "user-manager active$"
       "DONE$"
       "result 0$"
+      "unit systemd-timesyncd.service ${if cfg.services.timesyncd.enable then "active" else "inactive"}$"
+      "virtwl user=allowed other=denied$"
     ]
     ++ (
       [
