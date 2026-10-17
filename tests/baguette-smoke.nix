@@ -13,6 +13,10 @@ in
   probeFiles ? { },
   extraProbe ? "",
   extraChecks ? [ ],
+  # Restart crosvm on the same writable disk after each guest poweroff.
+  reboots ? 0,
+  secondProbe ? extraProbe,
+  secondChecks ? extraChecks,
   timeout ? 900,
 
 }:
@@ -50,67 +54,78 @@ let
     "sommelier-x@0.service"
     "sommelier-x@1.service"
   ];
-  probe = pkgs.writeShellScript "baguette-probe" ''
-    set -euo pipefail
-    export PATH=/run/current-system/sw/bin:/run/wrappers/bin
-    export probe=/opt/google/cros-containers/probe
-    user=${lib.escapeShellArg user}
-    stty -ixon -ixoff -crtscts 2>/dev/null || true
+  ephemeral = cfg.baguette.ephemeralRoot;
+  mkProbe =
+    extra:
+    pkgs.writeShellScript "baguette-probe" ''
+      set -euo pipefail
+      export PATH=/run/current-system/sw/bin:/run/wrappers/bin
+      export probe=/opt/google/cros-containers/probe
+      user=${lib.escapeShellArg user}
+      stty -ixon -ixoff -crtscts 2>/dev/null || true
 
-    systemctl --failed --no-legend --plain > /tmp/failed-system
-    cat /tmp/failed-system
-    test ! -s /tmp/failed-system
+      systemctl --failed --no-legend --plain > /tmp/failed-system
+      cat /tmp/failed-system
+      if [ -s /tmp/failed-system ]; then
+        journalctl -b -p err --no-pager
+        exit 1
+      fi
 
-    # Check through the system manager before invoking anything as the user.
-    # setpriv below does not open a PAM session and cannot heal this failure.
-    for _ in $(seq 60); do
-      systemctl is-active --quiet user@${uid}.service && break
-      sleep 1
-    done
-    manager=$(systemctl is-active user@${uid}.service || true)
-    echo "PROBE user-manager $manager"
-    [ "$manager" = active ] || exit 1
-    test -S /run/user/${uid}/bus
-
-    as_user() {
-      setpriv --reuid ${uid} --regid ${lib.escapeShellArg account.group} --init-groups \
-        env HOME=${lib.escapeShellArg account.home} USER="$user" LOGNAME="$user" \
-        XDG_RUNTIME_DIR=/run/user/${uid} \
-        DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${uid}/bus "$@"
-    }
-    # Application commands inherit the environment of the real user manager.
-    # No test copy of MOZ_LEGACY_HOME, DISPLAY or the profile setup is allowed.
-    in_session() {
-      as_user systemd-run --user --quiet --wait --pipe --collect "$@"
-    }
-    for unit in ${lib.escapeShellArgs units}; do
+      # Check through the system manager before invoking anything as the user.
+      # setpriv below does not open a PAM session and cannot heal this failure.
       for _ in $(seq 60); do
-        as_user systemctl --user is-active --quiet "$unit" && break
+        systemctl is-active --quiet user@${uid}.service && break
         sleep 1
       done
-      as_user systemctl --user is-active --quiet "$unit" || {
-        as_user journalctl --user -u "$unit" --no-pager -n 30
-        exit 1
-      }
-      echo "PROBE unit $unit active"
-    done
-    echo "PROBE user $(id "$user")"
-    echo "PROBE kernel $(uname -r)"
-    echo "PROBE home $(stat -c '%U %a' ${lib.escapeShellArg account.home})"
-    echo "PROBE root $(findmnt -n -b -o FSTYPE,SIZE /)"
-    echo "PROBE init $(readlink /sbin/init)"
-    echo "PROBE usermod $(readlink /usr/sbin/usermod)"
-    ${extraProbe}
+      manager=$(systemctl is-active user@${uid}.service || true)
+      echo "PROBE user-manager $manager"
+      [ "$manager" = active ] || exit 1
+      test -S /run/user/${uid}/bus
 
-    # Check both managers after the applications have run as well.
-    systemctl --failed --no-legend --plain > /tmp/failed-system
-    as_user systemctl --user --failed --no-legend --plain > /tmp/failed-user
-    cat /tmp/failed-system /tmp/failed-user
-    test ! -s /tmp/failed-system
-    test ! -s /tmp/failed-user
-    echo "PROBE failed []"
-    echo "PROBE DONE"
-  '';
+      as_user() {
+        setpriv --reuid ${uid} --regid ${lib.escapeShellArg account.group} --init-groups \
+          env HOME=${lib.escapeShellArg account.home} USER="$user" LOGNAME="$user" \
+          XDG_RUNTIME_DIR=/run/user/${uid} \
+          DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${uid}/bus "$@"
+      }
+      # Application commands inherit the environment of the real user manager.
+      # No test copy of MOZ_LEGACY_HOME, DISPLAY or the profile setup is allowed.
+      in_session() {
+        as_user systemd-run --user --quiet --wait --pipe --collect "$@"
+      }
+      for unit in ${lib.escapeShellArgs units}; do
+        for _ in $(seq 60); do
+          as_user systemctl --user is-active --quiet "$unit" && break
+          sleep 1
+        done
+        as_user systemctl --user is-active --quiet "$unit" || {
+          as_user journalctl --user -u "$unit" --no-pager -n 30
+          exit 1
+        }
+        echo "PROBE unit $unit active"
+      done
+      echo "PROBE user $(id "$user")"
+      echo "PROBE kernel $(uname -r)"
+      echo "PROBE home $(stat -c '%U %a' ${lib.escapeShellArg account.home})"
+      echo "PROBE root $(findmnt -n -b -o FSTYPE,SIZE /)"
+      ${lib.optionalString ephemeral.enable ''
+        echo "PROBE state $(findmnt -n -b -o FSTYPE,SIZE ${lib.escapeShellArg ephemeral.stateMountPoint})"
+      ''}
+      echo "PROBE init $(readlink /sbin/init)"
+      echo "PROBE usermod $(readlink /usr/sbin/usermod)"
+      ${extra}
+
+      # Check both managers after the applications have run as well.
+      systemctl --failed --no-legend --plain > /tmp/failed-system
+      as_user systemctl --user --failed --no-legend --plain > /tmp/failed-user
+      cat /tmp/failed-system /tmp/failed-user
+      test ! -s /tmp/failed-system
+      test ! -s /tmp/failed-user
+      echo "PROBE failed []"
+      echo "PROBE DONE"
+    '';
+  probe = mkProbe extraProbe;
+  rebootProbe = mkProbe secondProbe;
   xfonts = pkgs.runCommand "baguette-xfonts" { nativeBuildInputs = [ pkgs.mkfontscale ]; } ''
     mkdir -p $out/misc
     cp ${pkgs.font-misc-misc}/share/fonts/X11/misc/*.pcf.gz \
@@ -154,7 +169,11 @@ let
         #!/bin/sh
         export PATH=/run/current-system/sw/bin
         systemctl is-system-running --wait >/dev/null || true
-        /opt/google/cros-containers/probe/probe.sh > /dev/ttyS1 2>&1
+        script=probe.sh
+        case " $(cat /proc/cmdline) " in
+          *" baguette.test-reboot=1 "*) script=second-probe.sh ;;
+        esac
+        /opt/google/cros-containers/probe/$script > /dev/ttyS1 2>&1
         result=$?
         echo "PROBE result $result" > /dev/ttyS1
         systemctl poweroff --no-block
@@ -191,6 +210,7 @@ let
           bash -n root/bin/$wrapper
         done
         install -m 0755 ${probe} root/probe/probe.sh
+        install -m 0755 ${rebootProbe} root/probe/second-probe.sh
         ${lib.concatStringsSep "\n" (
           lib.mapAttrsToList (
             target: source:
@@ -200,25 +220,31 @@ let
         truncate -s 2G "$out"
         mkfs.ext4 -q -L cros-vm-tools -d root "$out"
       '';
-  checks = [
-    "user-manager active$"
-    "DONE$"
-    "result 0$"
-  ]
-  ++ (
+  checks =
+    extra:
     [
-      "failed \\[ *\\]"
-      "user uid=${uid}\\(${lib.escapeRegex user}\\)"
+      "user-manager active$"
+      "DONE$"
+      "result 0$"
     ]
-    ++ [
-      "home ${user} ${account.homeMode}$"
-      "init ${shipped.toplevel}/init$"
-    ]
-    ++ map (unit: "unit ${lib.escapeRegex unit} active$") units
-    ++ extraChecks
-  );
-  checkProbes = shared.mkCheckProbes pkgs checks;
+    ++ (
+      [
+        "failed \\[ *\\]"
+        "user uid=${uid}\\(${lib.escapeRegex user}\\)"
+      ]
+      ++ [
+        "home ${user} ${account.homeMode}$"
+        "init ${shipped.toplevel}/${if ephemeral.enable then "ephemeral-init" else "init"}$"
+      ]
+      ++ map (unit: "unit ${lib.escapeRegex unit} active$") units
+      ++ extra
+    );
+  checkProbes = shared.mkCheckProbes pkgs (checks extraChecks);
+  checkSecondProbes = shared.mkCheckProbes pkgs (checks secondChecks);
 in
+assert lib.assertMsg (
+  builtins.isInt reboots && reboots >= 0
+) "baguette-smoke: reboots must be a nonnegative integer";
 pkgs.runCommand name
   {
     nativeBuildInputs = [
@@ -245,14 +271,16 @@ pkgs.runCommand name
     chmod u+w root.img tools.img
     image_size=$(stat -c %s root.img)
     truncate -s $((image_size + 2 * 1024 * 1024 * 1024)) root.img
-    touch console.log probe.log crosvm.log weston.log
+    touch weston.log
     # Nix shows only the last lines of a failed build. The verdict of
     # verify-boot.sh must come after the logs, and the console log must
     # not fill that window on its own.
     dump_logs() {
       dumped=1
-      tail -n 200 console.log
-      cat probe.log crosvm.log weston.log
+      for log in console-*.log; do
+        [ ! -f "$log" ] || tail -n 200 "$log" | tr -d '\r'
+      done
+      cat probe-*.log crosvm-*.log weston.log | tr -d '\r'
     }
     dumped=
     cleanup() {
@@ -274,18 +302,31 @@ pkgs.runCommand name
     done
     test -S "$XDG_RUNTIME_DIR/wayland-host"
     status=0
-    timeout ${toString timeout} crosvm run --disable-sandbox --cpus 2 --mem 4096 \
-      --serial type=file,path=console.log,hardware=serial,num=1,console=true \
-      --serial type=file,path=probe.log,hardware=serial,num=2 \
-      --gpu backend=virglrenderer,context-types=cross-domain \
-      --wayland-sock "$XDG_RUNTIME_DIR/wayland-host" \
-      --params "root=/dev/vdb rw init=/sbin/init console=ttyS0" \
-      --block path=tools.img --block path=root.img \
-      ${kernel}/kernel > crosvm.log 2>&1 || status=$?
+    for boot in $(seq ${toString (reboots + 1)}); do
+      params="root=/dev/vdb rw init=/sbin/init console=ttyS0"
+      checker=${checkProbes}
+      if [ "$boot" -gt 1 ]; then
+        params="$params baguette.test-reboot=1"
+        checker=${checkSecondProbes}
+      fi
+      vm_status=0
+      timeout ${toString timeout} crosvm run --disable-sandbox --cpus 2 --mem 4096 \
+        --serial type=file,path=console-$boot.log,hardware=serial,num=1,console=true \
+        --serial type=file,path=probe-$boot.log,hardware=serial,num=2 \
+        --gpu backend=virglrenderer,context-types=cross-domain \
+        --wayland-sock "$XDG_RUNTIME_DIR/wayland-host" \
+        --params "$params" \
+        --block path=tools.img --block path=root.img \
+        ${kernel}/kernel > crosvm-$boot.log 2>&1 || vm_status=$?
+      bash ${./verify-boot.sh} "$vm_status" probe-$boot.log "$checker" \
+        ${kernel}/release "$image_size" ${if ephemeral.enable then "state" else "root"} \
+        > verdict-$boot.log 2>&1 || status=1
+      [ "$status" -eq 0 ] || break
+    done
     dump_logs
     mkdir "$out"
     cp *.log "$out/"
     sha256sum ${shipped.btrfsImageCompressed}/baguette_rootfs.img.zst ${kernel}/kernel ${toolsDisk} > "$out/inputs.sha256"
-    bash ${./verify-boot.sh} "$status" probe.log ${checkProbes} \
-      ${kernel}/release "$image_size"
+    cat verdict-*.log
+    exit "$status"
   ''

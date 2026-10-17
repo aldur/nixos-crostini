@@ -112,6 +112,9 @@
           configuration = baguetteNixosFor system;
           name = "baguette-boot-termina";
         };
+        baguette-ephemeral = import ./tests/baguette-ephemeral.nix { inherit (nixpkgs) lib; } {
+          configuration = baguetteNixosFor system;
+        };
         guest-session = import ./tests/guest-session.nix { inherit nixpkgs system; };
         boot-verifier = import ./tests/verify-boot.nix {
           pkgs = nixpkgs.legacyPackages.${system};

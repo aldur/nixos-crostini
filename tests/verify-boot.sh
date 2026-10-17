@@ -6,6 +6,7 @@ probe_log=${2:?Probe log required}
 check_probes=${3:?Probe checker required}
 kernel_release=${4:?Kernel release file required}
 image_size=${5:?Original image size required}
+size_probe=${6:-root}
 
 if [ "$vm_status" -ne 0 ]; then
   echo "FAIL: crosvm exited with status $vm_status" >&2
@@ -14,8 +15,8 @@ fi
 "$check_probes" "$probe_log"
 
 tr -d '\r' < "$probe_log" | grep -Fx "PROBE kernel $(cat "$kernel_release")" > /dev/null
-root_size=$(tr -d '\r' < "$probe_log" | sed -n 's/^PROBE root btrfs *\([0-9]*\).*$/\1/p')
-if [[ ! "$root_size" =~ ^[0-9]+$ ]] || [ "$root_size" -le "$image_size" ]; then
-  echo "FAIL: root filesystem was not grown" >&2
+filesystem_size=$(tr -d '\r' < "$probe_log" | sed -n "s/^PROBE $size_probe btrfs *\([0-9]*\).*$/\1/p")
+if [[ ! "$filesystem_size" =~ ^[0-9]+$ ]] || [ "$filesystem_size" -le "$image_size" ]; then
+  echo "FAIL: $size_probe filesystem was not grown" >&2
   exit 1
 fi

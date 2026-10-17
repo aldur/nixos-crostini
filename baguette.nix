@@ -8,6 +8,34 @@
     ...
   }:
   let
+    ephemeral = config.baguette.ephemeralRoot;
+    resizeMountPoint = if ephemeral.enable then ephemeral.stateMountPoint else "/";
+    resizeCommand = "${pkgs.btrfs-progs}/bin/btrfs filesystem resize max ${lib.escapeShellArg resizeMountPoint}";
+    overlayOptions = [
+      "lowerdir=/run/ephemeral/lower"
+      "upperdir=/run/ephemeral/upper"
+      "workdir=/run/ephemeral/work"
+    ];
+    # Without an initrd, `init` is stage 2. A systemd initrd uses
+    # `prepare-root` instead, leaving `init` for systemd itself.
+    initScript =
+      if config.boot.initrd.enable && config.boot.initrd.systemd.enable then "prepare-root" else "init";
+    ephemeralInit = pkgs.replaceVarsWith {
+      src = ./ephemeral-init.sh;
+      isExecutable = true;
+      replacements = {
+        shell = "${pkgs.bash}/bin/bash";
+        coreutils = pkgs.coreutils;
+        utilLinux = pkgs.util-linux;
+        btrfs = pkgs.btrfs-progs;
+        tmpfsSize = ephemeral.tmpfsSize;
+        overlayOptions = lib.concatStringsSep "," overlayOptions;
+        earlyMountScript = config.system.build.earlyMountScript;
+        stage2 = initScript;
+        systemConfig = null; # Filled in by the toplevel builder.
+      };
+    };
+
     baguette-env = pkgs.stdenv.mkDerivation {
       name = "10-baguette-envs.sh";
       # Vendored from chromiumos/platform2 at
@@ -45,6 +73,29 @@
     ];
 
     options = with lib; {
+      baguette.ephemeralRoot = {
+        enable = mkEnableOption "a fresh Baguette root at each boot, with root writes in RAM";
+
+        stateMountPoint = mkOption {
+          type = types.strMatching "/.+";
+          default = "/state";
+          description = ''
+            Mount point of the persistent Btrfs subvolume named state.
+            Use bind mounts from this path to keep data between boots.
+          '';
+        };
+
+        tmpfsSize = mkOption {
+          type = types.strMatching "[1-9][0-9]*[kKmMgGtTpPeE%]?";
+          default = "1G";
+          description = ''
+            Size limit of the tmpfs that holds the overlay's upper and work
+            directories. Use bytes, a unit such as M or G, or a percentage
+            of RAM. Writes fail with ENOSPC when the tmpfs is full.
+          '';
+        };
+      };
+
       virtualisation.buildMemorySize = mkOption {
         type = types.ints.positive;
         default = 1024;
@@ -91,10 +142,27 @@
       };
 
       # Filesystem configuration
-      fileSystems."/" = {
-        device = "/dev/vdb";
-        fsType = "btrfs";
-      };
+      fileSystems =
+        if ephemeral.enable then
+          {
+            "/" = {
+              device = "overlay";
+              fsType = "overlay";
+              options = overlayOptions;
+            };
+            ${ephemeral.stateMountPoint} = {
+              device = "/dev/vdb";
+              fsType = "btrfs";
+              options = [ "subvol=state" ];
+            };
+          }
+        else
+          {
+            "/" = {
+              device = "/dev/vdb";
+              fsType = "btrfs";
+            };
+          };
 
       # Disable systemd-gpt-auto-generator which fails (graciously) in Baguette.
       systemd.generators."systemd-gpt-auto-generator" = "/dev/null";
@@ -177,14 +245,14 @@
 
       system =
         let
-          # https://github.com/jmbaur/nixpkgs/blob/115c1d69015de09f4211890477af05ba4fb873b9/nixos/modules/virtualisation/lxc-container.nix#L18-L19
-          # The same condition as nixos/modules/system/activation/top-level.nix:
-          # with a systemd initrd, `init` is systemd and `prepare-root` the
-          # stage-2 script. Without an initrd, `init` is the stage-2 script.
-          initScript =
-            if config.boot.initrd.enable && config.boot.initrd.systemd.enable then "prepare-root" else "init";
+          imageInit = if ephemeral.enable then "ephemeral-init" else initScript;
         in
         {
+          systemBuilderCommands = lib.mkIf ephemeral.enable ''
+            cp ${ephemeralInit} "$out/ephemeral-init"
+            substituteInPlace "$out/ephemeral-init" --subst-var-by systemConfig "$out"
+          '';
+
           activationScripts = {
 
             baguette = ''
@@ -201,12 +269,20 @@
                 ln -sf ${lib.getExe pkgs.bashInteractive} /bin/bash
               ''
             # Resize the available space to the one provided by Baguette
-            + ''
-              ${pkgs.btrfs-progs}/bin/btrfs filesystem resize max /
-            ''
+            + (
+              if ephemeral.enable then
+                ''
+                  # At boot, systemd mounts state after activation.
+                  if ${pkgs.util-linux}/bin/mountpoint -q ${lib.escapeShellArg ephemeral.stateMountPoint}; then
+                    ${resizeCommand}
+                  fi
+                ''
+              else
+                resizeCommand + "\n"
+            )
             # Re-link the initScript (in case of toggling `boot.initrd.systemd.enable` or `boot.initrd.enable`)
             + ''
-              ln -sf "$systemConfig/${initScript}" /sbin/init
+              ln -sf "$systemConfig/${imageInit}" /sbin/init
             ''
             # The init script builder of nixpkgs compares the filesystem of
             # /boot with the one of /. The image ships no /boot, so the first
@@ -241,7 +317,7 @@
               contents = [
                 # same as baguette Debian image
                 {
-                  source = config.system.build.toplevel + "/${initScript}";
+                  source = config.system.build.toplevel + "/${imageInit}";
                   target = "/sbin/init";
                 }
               ];
@@ -305,7 +381,9 @@
                         --set ${config.system.build.toplevel}
                       umount /mnt/rootfs_subvol/proc /mnt/rootfs_subvol/dev
                       rm /mnt/rootfs_subvol/nix-path-registration
-
+                      ${lib.optionalString ephemeral.enable ''
+                        btrfs property set -ts /mnt/rootfs_subvol ro true
+                      ''}
                       # Get the subvolume ID
                       echo "Getting subvolume ID..."
                       subvol_id=$(btrfs subvolume list /mnt | grep rootfs_subvol | awk '{print $2}')
@@ -404,6 +482,28 @@
             ) (lib.filter (user: user.crostini.enable) (lib.attrValues config.users.users))
           )
           // {
+            # Since Linux 6.5, overlayfs rejects all options on reconfigure with
+            # the new mount API. The legacy API ignores them.
+            systemd-remount-fs.environment = lib.mkIf ephemeral.enable {
+              LIBMOUNT_FORCE_MOUNT2 = "always";
+            };
+
+            # Activation runs before systemd mounts state.
+            baguette-resize = lib.mkIf ephemeral.enable {
+              description = "Grow the persistent filesystem to the disk size";
+              wantedBy = [ "local-fs.target" ];
+              before = [ "local-fs.target" ];
+              unitConfig = {
+                DefaultDependencies = false;
+                RequiresMountsFor = ephemeral.stateMountPoint;
+              };
+              serviceConfig = {
+                Type = "oneshot";
+                RemainAfterExit = true;
+                ExecStart = resizeCommand;
+              };
+            };
+
             # Shell access comes through vshd. An unattached serial getty
             # competes with the boot log and probes ChromeOS's console.
             "serial-getty@".enable = lib.mkDefault false;

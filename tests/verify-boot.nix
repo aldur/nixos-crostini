@@ -17,10 +17,10 @@ pkgs.runCommand "baguette-boot-verifier" { } ''
   EOF
   echo fixture-kernel > release
   verify() {
-    bash ${./verify-boot.sh} "$1" "$2" ${check} release 100
+    bash ${./verify-boot.sh} "$1" "$2" ${check} release 100 "''${3:-root}"
   }
   reject() {
-    if verify "$1" "$2"; then
+    if verify "$@"; then
       echo "FAIL: accepted $1 $2" >&2
       exit 1
     fi
@@ -40,5 +40,10 @@ pkgs.runCommand "baguette-boot-verifier" { } ''
   reject 0 wrong-kernel.log
   sed 's/btrfs 200/btrfs 100/' good.log > no-resize.log
   reject 0 no-resize.log
+  sed 's/root btrfs 200/root overlay 50\nPROBE state btrfs 200/' good.log > ephemeral.log
+  verify 0 ephemeral.log state
+  reject 0 ephemeral.log
+  sed 's/state btrfs 200/state btrfs 100/' ephemeral.log > no-state-resize.log
+  reject 0 no-state-resize.log state
   touch "$out"
 ''
