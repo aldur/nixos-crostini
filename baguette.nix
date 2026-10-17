@@ -173,6 +173,7 @@
       # Baguette boots the ChromeOS kernel. The kernel, its modules, and the
       # initrd of the configuration never run, and take 200 MiB in the image.
       boot.kernel.enable = lib.mkDefault false;
+      boot.kexec.enable = lib.mkDefault false;
       boot.initrd.enable = lib.mkDefault false;
 
       networking = {
@@ -185,6 +186,11 @@
           "100.115.92.2" = [ "arc" ];
         };
       };
+
+      # The virtual RTC supplies the clock at boot. After every host resume,
+      # concierge calls maitred's SetTime (vm_tools/concierge/service.cc,
+      # HandleSuspendDone).
+      services.timesyncd.enable = lib.mkDefault false;
 
       services = {
         # Add rw permissions to group and others for /dev/wl0
