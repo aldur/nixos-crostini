@@ -246,18 +246,13 @@ in
     };
 
     system.activationScripts = {
-      # Activating sommelier-x relies on the bind-mounted Xwayland executable. As
-      # far as I could debug, this path can't be controlled through env and would
-      # require re-compiling Xwayland (which is also dynamically loaded by the
-      # sommelier executable).
-      #
-      # Same for the `sftp-server` launched by `garcon`.
-      #
-      # These are ugly HACKs, but they work
-      xkb = lib.mkIf config.crostini.sommelier.xwayland.enable ''
+      # ChromeOS's Sommelier expects keyboard data here even for native
+      # Wayland clients, so keep it available when Xwayland is disabled.
+      xkb = ''
         mkdir -p /usr/share/
         ln -sf ${pkgs.xkeyboard_config}/share/X11/ /usr/share/
       '';
+      # garcon launches the host-mounted sftp-server at this path.
       sftp-server = ''
         mkdir -p /usr/lib/openssh/
         ln -sf ${pkgs.openssh}/libexec/sftp-server /usr/lib/openssh/sftp-server

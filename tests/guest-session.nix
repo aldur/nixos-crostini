@@ -147,7 +147,8 @@ assert lib.all
     && c.systemd.user.targets.default.wants == c.systemd.user.services.garcon.requires
     && !(c.systemd.user.units ? "sommelier-x@.service")
     && !(c.systemd.user.units ? "sommelier-x@1.service")
-    && !(c.system.activationScripts ? xkb)
+    && c.system.activationScripts ? xkb
+    && c.system.activationScripts.xkb == valid.system.activationScripts.xkb
     && !(c.environment.etc ? sommelierrc)
     && lib.all (package: !(lib.elem package c.environment.systemPackages)) [
       pkgs.wl-clipboard
@@ -283,4 +284,12 @@ assert lib.all
 # Legacy LXC users may still be provisioned by the host, without this option.
 assert sessionFailures (make ../crostini.nix [ ]) == [ ];
 assert (make ../crostini.nix [ settings ]).users.users.alice.linger;
-pkgs.runCommand "crostini-guest-session-configuration" { } "touch $out"
+pkgs.runCommand "crostini-guest-session-configuration"
+  { nativeBuildInputs = [ pkgs.libxkbcommon ]; }
+  ''
+    # Exercise ChromeOS's default XKB path using the Wayland-only activation.
+    mkdir -p root/usr/share
+    ${lib.replaceStrings [ "/usr/share/" ] [ "$PWD/root/usr/share/" ] minimal.system.activationScripts.xkb}
+    XKB_CONFIG_ROOT="$PWD/root/usr/share/X11/xkb" xkbcli compile-keymap --layout us > /dev/null
+    touch "$out"
+  ''
