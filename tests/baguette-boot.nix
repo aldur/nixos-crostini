@@ -275,7 +275,7 @@ let
     echo "PROBE zoneinfo $(readlink /usr/share/zoneinfo)"
     echo "PROBE groups $(getent group kvm netdev sudo tss | cut -d : -f 1 | tr '\n' ' ')"
     echo "PROBE hosts $(getent hosts arc | awk '{ print $1 }')"
-    echo "PROBE udev $(grep -l 'KERNEL=="wl\*", MODE="0666"' /etc/udev/rules.d/* | xargs -n 1 basename | tr '\n' ' ')"
+    echo "PROBE udev $(grep -Fl 'KERNEL=="wl*", GROUP="virtwl", MODE="0660"' /etc/udev/rules.d/* | xargs -r -n 1 basename | tr '\n' ' ')"
     echo "PROBE journald $(grep '^ForwardToConsole=' /etc/systemd/journald.conf)"
     ${shared.commonModuleProbe}
 
