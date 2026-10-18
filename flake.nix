@@ -163,7 +163,7 @@
       };
 
       templates.default = {
-        path = self;
+        path = ./.;
         description = "nixos-crostini quick start";
       };
     };
