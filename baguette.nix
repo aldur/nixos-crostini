@@ -77,14 +77,20 @@
 
     options = with lib; {
       baguette.ephemeralRoot = {
-        enable = mkEnableOption "a fresh Baguette root at each boot, with root writes in RAM";
+        enable = mkEnableOption "a fresh Baguette root at each boot, with root writes in RAM" // {
+          description = ''
+            Start each boot with a fresh root filesystem.
+            Store root changes in RAM.
+            Keep persistent data in the Btrfs state subvolume.
+          '';
+        };
 
         persistMachineId = mkEnableOption "a stable machine ID on the state volume" // {
           description = ''
-            Keep the machine ID in the persistent state subvolume's machine-id
-            file, generating it on first boot. The pre-init copies it into
-            the overlay's /etc/machine-id before systemd starts. Only applies
-            when ephemeralRoot.enable is true.
+            Keep the machine ID in the state subvolume's `machine-id` file.
+            Generate the ID on the first boot.
+            Copy the ID into `/etc/machine-id` before systemd starts.
+            This option requires `baguette.ephemeralRoot.enable`.
           '';
         };
 
@@ -96,9 +102,9 @@
             "nodev"
           ];
           description = ''
-            Extra options passed when the overlay root is first mounted,
-            before systemd starts. Overlayfs options cannot be applied by
-            remounting the root through fstab.
+            Set extra options for the first overlay mount.
+            The guest mounts the overlay before systemd starts.
+            Use this option instead of an fstab remount.
           '';
         };
 
@@ -106,7 +112,7 @@
           type = types.strMatching "/.+";
           default = "/state";
           description = ''
-            Mount point of the persistent Btrfs subvolume named state.
+            Set the mount point for the persistent Btrfs `state` subvolume.
             Use bind mounts from this path to keep data between boots.
           '';
         };
@@ -115,26 +121,28 @@
           type = types.strMatching "[1-9][0-9]*[kKmMgGtTpPeE%]?";
           default = "1G";
           description = ''
-            Size limit of the tmpfs that holds the overlay's upper and work
-            directories. Use bytes, a unit such as M or G, or a percentage
-            of RAM. Writes fail with ENOSPC when the tmpfs is full.
+            Set the size limit for the tmpfs that stores root changes.
+            Use bytes, a unit such as M or G, or a percentage of RAM.
+            Writes fail with ENOSPC when the tmpfs is full.
           '';
         };
       };
 
       baguette.portListener.enable = mkEnableOption "advertising guest listening ports to ChromeOS" // {
         default = true;
+        description = "Send guest listening ports to ChromeOS.";
       };
 
       baguette.notifications.enable = mkEnableOption "forwarding guest notifications to ChromeOS" // {
         default = true;
+        description = "Send desktop notifications to ChromeOS.";
       };
 
       virtualisation.buildMemorySize = mkOption {
         type = types.ints.positive;
         default = 1024;
         description = ''
-          The memory size of the virtual machine used to build the BTRFS image in MiB (1024×1024 bytes).
+          Set the memory size of the image build VM in MiB.
         '';
       };
 
@@ -142,7 +150,7 @@
         type = types.ints.positive;
         default = 4096;
         description = ''
-          The size of the resulting BTRFS image in MiB (1024×1024 bytes).
+          Set the Btrfs image size in MiB.
         '';
       };
     };

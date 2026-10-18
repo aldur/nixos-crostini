@@ -14,6 +14,9 @@ ChromeOS). The resulting guest supports:
 See [this blog post][0] for more details about LXC support and [this one][5]
 for Baguette support.
 
+See the [module reference](https://aldur.github.io/nixos-crostini/) for configuration options.
+The documentation build reads the option declarations directly from the modules.
+
 ## Quick start
 
 1. [Install Nix][1].

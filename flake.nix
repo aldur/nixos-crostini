@@ -71,6 +71,11 @@
           lxc-nixos = lxcNixosFor system;
         in
         rec {
+          docs = nixpkgs.legacyPackages.${system}.callPackage ./docs {
+            modules = self.nixosModules;
+            revision = self.rev or "main";
+          };
+
           termina-kernel = nixpkgs.legacyPackages.${system}.callPackage ./packages/termina-kernel.nix { };
 
           # The crostini module imports the LXC modules of nixpkgs, so the
@@ -104,7 +109,7 @@
       );
 
       checks = forAllSystems (system: {
-        inherit (self.outputs.packages.${system}) baguette-tarball lxc-image-and-metadata;
+        inherit (self.outputs.packages.${system}) baguette-tarball lxc-image-and-metadata docs;
         baguette-boot = self.lib.mkBaguetteTest {
           configuration = baguetteNixosFor system;
         };
@@ -116,6 +121,11 @@
           configuration = baguetteNixosFor system;
         };
         guest-session = import ./tests/guest-session.nix { inherit nixpkgs system; };
+        docs-contract = nixpkgs.legacyPackages.${system}.callPackage ./tests/docs.nix {
+          inherit (self.packages.${system}) docs;
+          modules = self.nixosModules;
+        };
+        workflow-security = nixpkgs.legacyPackages.${system}.callPackage ./tests/workflows.nix { };
         boot-verifier = import ./tests/verify-boot.nix {
           pkgs = nixpkgs.legacyPackages.${system};
         };

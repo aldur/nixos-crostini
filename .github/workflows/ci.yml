@@ -1,3 +1,5 @@
+name: CI
+
 on:
   pull_request:
   workflow_dispatch:
@@ -7,13 +9,17 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   nixos-ci:
+    name: NixOS (${{ matrix.system }})
+    permissions:
+      contents: read
+    env:
+      CROSTINI_TEST_SYSTEM: ${{ matrix.system }}
     strategy:
       fail-fast: false
       matrix:
@@ -31,7 +37,7 @@ jobs:
             kvm: true
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 #v6.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # crosvm and the NixOS VM test require KVM.
@@ -42,12 +48,22 @@ jobs:
           ls -l /dev/kvm || true
           test -c /dev/kvm
           sudo chmod a+rw /dev/kvm
-      - uses: DeterminateSystems/determinate-nix-action@1d699fc25db3f9e079cd2f168ca007a4183389be  # v3.15.1
-      - uses: DeterminateSystems/flake-checker-action@3164002371bc90729c68af0e24d5aacf20d7c9f6  # v12
+      - uses: DeterminateSystems/determinate-nix-action@e847f25223456b3058e12f7fc9d777b6a6f25060 # v3.23.2
+      - uses: DeterminateSystems/flake-checker-action@786422608c7bded2bbc9741ad9f91356842bf520 # v14
 
       - run: nix flake check --no-build
       - name: Check the guest session contract and boot log verifier
-        run: nix build --no-link .#checks.${{ matrix.system }}.guest-session .#checks.${{ matrix.system }}.boot-verifier
+        run: nix build --no-link ".#checks.$CROSTINI_TEST_SYSTEM.guest-session" ".#checks.$CROSTINI_TEST_SYSTEM.boot-verifier"
+      - name: Check workflows and build the module reference
+        if: matrix.system == 'x86_64-linux'
+        run: |
+          nix build -L --no-link ".#checks.$CROSTINI_TEST_SYSTEM.workflow-security" ".#checks.$CROSTINI_TEST_SYSTEM.docs-contract"
+          nix build -L --out-link docs-site .#docs
+      - name: Upload the module reference
+        if: matrix.system == 'x86_64-linux'
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: docs-site
       - run: nix build --no-link .#baguette-tarball .#lxc-image-and-metadata .#termina-kernel
       # The quick start of the README, as written: every `quick-start`
       # block, in order, with this checkout in place of the repository on
@@ -55,19 +71,19 @@ jobs:
       # nixpkgs.
       - name: Follow the quick start of the README
         run: |
-          nix registry add github:aldur/nixos-crostini path:$GITHUB_WORKSPACE
+          nix registry add github:aldur/nixos-crostini "path:$GITHUB_WORKSPACE"
           awk '/^```bash quick-start$/ { on = 1; next } /^```$/ { on = 0 } on' README.md > /tmp/quick-start.sh
           mkdir /tmp/quick-start
           cd /tmp/quick-start
           bash -euxo pipefail /tmp/quick-start.sh
       - name: Boot the Baguette image
         if: matrix.kvm
-        run: nix build -L --out-link boot-test .#checks.${{ matrix.system }}.baguette-boot
+        run: nix build -L --out-link boot-test ".#checks.$CROSTINI_TEST_SYSTEM.baguette-boot"
       # A failed boot keeps its logs in the job output, through the trap
       # of the test. The link exists on success only.
       - name: Upload boot logs and screenshots
         if: matrix.kvm && success()
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: baguette-boot-${{ matrix.arch }}
           path: |
@@ -76,30 +92,46 @@ jobs:
           if-no-files-found: error
       - name: Boot the LXC image
         if: matrix.kvm
-        run: nix build -L --no-link .#checks.${{ matrix.system }}.lxc-boot
+        run: nix build -L --no-link ".#checks.$CROSTINI_TEST_SYSTEM.lxc-boot"
       - name: Boot the Baguette image with Termina
         if: matrix.kvm
-        run: nix build -L --out-link termina-boot-test .#checks.${{ matrix.system }}.baguette-boot-termina
+        run: nix build -L --out-link termina-boot-test ".#checks.$CROSTINI_TEST_SYSTEM.baguette-boot-termina"
       - name: Upload Termina boot logs
         if: matrix.kvm && success()
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: baguette-boot-termina-${{ matrix.arch }}
           path: termina-boot-test/*.log
           if-no-files-found: error
       - name: Boot the ephemeral Baguette image twice
         if: matrix.kvm
-        run: nix build -L --out-link ephemeral-boot-test .#checks.${{ matrix.system }}.baguette-ephemeral
+        run: nix build -L --out-link ephemeral-boot-test ".#checks.$CROSTINI_TEST_SYSTEM.baguette-ephemeral"
       - name: Upload ephemeral boot logs
         if: matrix.kvm && success()
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: baguette-ephemeral-${{ matrix.arch }}
           path: ephemeral-boot-test/*.log
           if-no-files-found: error
       - run: nix build .#baguette-zimage
 
-      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: zimage-${{ matrix.arch }}
           path: result/*.zst
+
+  deploy-docs:
+    name: Deploy the module reference
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: nixos-ci
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write # Deploy the site artifact.
+      id-token: write # Verify the deployment with GitHub Pages.
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+        id: deployment

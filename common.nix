@@ -62,7 +62,12 @@ in
       type = lib.types.attrsOf (
         lib.types.submodule (
           { config, ... }: {
-            options.crostini.enable = lib.mkEnableOption "register this user with ChromeOS";
+            options.crostini.enable = lib.mkEnableOption "ChromeOS integration for this user" // {
+              description = ''
+                Register this user with ChromeOS.
+                Enable this option for one normal user.
+              '';
+            };
             config = lib.mkIf config.crostini.enable {
               uid = lib.mkDefault 1000;
               linger = lib.mkDefault true;
@@ -81,28 +86,26 @@ in
       sommelier.xwayland.enable = lib.mkEnableOption "X11 forwarding through Xwayland" // {
         default = true;
         description = ''
-          Start the X11 sommelier instances alongside the Wayland instances
-          and install their X11 helpers. Disable for a Wayland-only session.
-          The Xwayland executable itself comes from the ChromeOS tools disk.
+          Start Xwayland through the X11 sommelier instances.
+          Set this option to false for Wayland applications that do not need X11.
+          ChromeOS supplies the Xwayland executable on the tools disk.
         '';
       };
 
       sommelier.stableScaling = lib.mkEnableOption "`--stable-scaling` for the X11 sommelier" // {
         description = ''
-          Pass `--stable-scaling` to the X11 sommelier, as the ChromeOS
-          overrides do. With it, a GTK 2 window and sommelier round the size
-          of the window up in turn. This could result in a bug where a window
-          keeps getting wider.
+          Pass `--stable-scaling` to the X11 sommelier.
+          This matches the ChromeOS setting.
+          GTK 2 windows can increase in size after each resize.
         '';
       };
 
       ui.enable = lib.mkEnableOption "the UI integration of ChromeOS" // {
         default = true;
         description = ''
-          The host-mounted CrosAdapta theme for GTK 3, Adwaita from nixpkgs
-          for GTK 2, and the Adwaita icons and cursors used by garcon and
-          the themes. ChromeOS mounts CrosAdapta at
-          `/opt/google/cros-containers/cros-adapta`.
+          Use the ChromeOS GTK themes, icons, and cursors.
+          ChromeOS supplies CrosAdapta for GTK 3 at `/opt/google/cros-containers/cros-adapta`.
+          Use Adwaita for GTK 2.
         '';
       };
 
@@ -111,12 +114,13 @@ in
         default = pkgs.adwaita-icon-theme;
         defaultText = lib.literalExpression "pkgs.adwaita-icon-theme";
         description = ''
-          The package with the Adwaita theme under `share/icons/Adwaita`. 
+          Set the package that supplies `share/icons/Adwaita`.
         '';
       };
 
       extraTools.enable = lib.mkEnableOption "the xdg-utils, wl-clipboard and usbutils tools" // {
         default = true;
+        description = "Install `xdg-utils`, `wl-clipboard`, and `usbutils`.";
       };
     };
   };
