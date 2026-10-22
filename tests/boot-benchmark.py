@@ -52,12 +52,13 @@ def main():
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     manifest = json.loads(args.manifest.read_text())
+    state_image = manifest.get("stateImage")
     provenance = {
         "manifest": manifest,
         "arguments": vars(args) | {"manifest": str(args.manifest), "output": str(output)},
         "sha256": {},
     }
-    for key in ("image", "tools", "kernel"):
+    for key in ("image", "tools", "kernel", *(["stateImage"] if state_image else [])):
         with open(manifest[key], "rb") as source:
             provenance["sha256"][key] = hashlib.file_digest(source, "sha256").hexdigest()
     (output / "inputs.json").write_text(json.dumps(provenance, indent=2) + "\n")
@@ -86,7 +87,7 @@ def main():
             raise RuntimeError(f"Unexpected Weston notification: {notification!r}")
         for repetition in range(args.runs):
             disk = output / "root.img"
-            run("zstd", "-q", "-d", "-f", manifest["image"], "-o", str(disk))
+            run("zstd", "-q", "-d", "-f", state_image or manifest["image"], "-o", str(disk))
             image_size = disk.stat().st_size
             disk.chmod(0o600)
             with disk.open("r+b") as image:
@@ -108,6 +109,7 @@ def main():
                     "--wayland-sock", str(runtime / "wayland-host"),
                     "--params", " ".join(["root=/dev/vdb rw init=/sbin/init console=ttyS0",
                                           *args.kernel_param]),
+                    *(["--block", f"path={manifest['image']},ro=true,root=true"] if state_image else []),
                     "--block", f"path={manifest['tools']},ro=true", "--block", f"path={disk}", manifest["kernel"],
                 ]
                 started = time.monotonic()
@@ -116,7 +118,8 @@ def main():
                 elapsed = time.monotonic() - started
                 with (directory / "validation.log").open("w") as log:
                     run("bash", manifest["verifier"], str(completed.returncode), str(directory / "probe.log"),
-                        manifest["checker"], manifest["kernelRelease"], str(image_size), stdout=log, stderr=subprocess.STDOUT)
+                        manifest["checker"], manifest["kernelRelease"], str(image_size),
+                        "state" if state_image else "root", stdout=log, stderr=subprocess.STDOUT)
                 metrics = timings(directory / "probe.log")
                 records.append({"run": repetition + 1, "boot": boot, "kind": kind,
                                 "vm_lifetime_seconds": elapsed, "seconds": metrics})

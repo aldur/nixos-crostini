@@ -6,8 +6,14 @@ set -euo pipefail
 @utilLinux@/bin/mount -t devtmpfs devtmpfs /dev
 @utilLinux@/bin/mount -t tmpfs -o mode=755 tmpfs /run
 @utilLinux@/bin/mount --make-rprivate /
-# The top-level mount below makes the shared Btrfs superblock read-write again.
-# The lower mount's ro flag and the subvolume's ro property protect the root.
+root_device=$(@utilLinux@/bin/findmnt -n -o SOURCE /)
+# Btrfs adds the subvolume path to the mount source.
+root_device=${root_device%%\[*}
+if [ "$root_device" != /dev/vda ] ||
+   [ "$(@utilLinux@/bin/blockdev --getro /dev/vda)" != 1 ]; then
+  echo 'Baguette requires /dev/vda as the read-only root; use vmc start --rootfs.' >&2
+  exit 1
+fi
 @utilLinux@/bin/mount -o remount,ro /
 
 @coreutils@/bin/mkdir -p /run/ephemeral /run/newroot /run/btrfs
@@ -18,7 +24,7 @@ set -euo pipefail
   -o @overlayOptions@ \
   /run/newroot
 
-@utilLinux@/bin/mount -t btrfs -o rw,subvolid=5 /dev/vdb /run/btrfs
+@utilLinux@/bin/mount -t btrfs -o rw,subvolid=5 /dev/vdc /run/btrfs
 if [ ! -e /run/btrfs/state ]; then
   @btrfs@/bin/btrfs subvolume create /run/btrfs/state
 fi

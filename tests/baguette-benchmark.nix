@@ -15,11 +15,16 @@ let
   manifest = pkgs.writeText "baguette-benchmark.json" (
     builtins.toJSON {
       image = "${smoke.shipped.btrfsImageCompressed}/baguette_rootfs.img.zst";
+      stateImage =
+        if configuration.config.baguette.ephemeralRoot.enable then
+          "${smoke.shipped.btrfsImageCompressed}/baguette_state.img.zst"
+        else
+          null;
       tools = toString smoke.toolsDisk;
       kernel = "${smoke.kernel}/kernel";
       kernelRelease = "${smoke.kernel}/release";
       checker = toString smoke.checkProbes;
-      verifier = toString ./verify-boot.sh;
+      verifier = "${./verify-boot.sh}";
       system = toString smoke.shipped.toplevel;
     }
   );
@@ -28,7 +33,7 @@ pkgs.writeShellApplication {
   name = "baguette-benchmark";
   runtimeInputs = with pkgs; [
     python3
-    crosvm
+    smoke.crosvm
     coreutils
     weston
     zstd

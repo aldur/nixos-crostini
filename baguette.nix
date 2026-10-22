@@ -81,7 +81,8 @@
           description = ''
             Start each boot with a fresh root filesystem.
             Store root changes in RAM.
-            Keep persistent data in the Btrfs state subvolume.
+            Boot the base image with `vmc start --rootfs`.
+            Keep persistent data on a separate writable disk.
           '';
         };
 
@@ -136,6 +137,19 @@
       baguette.notifications.enable = mkEnableOption "forwarding guest notifications to ChromeOS" // {
         default = true;
         description = "Send desktop notifications to ChromeOS.";
+      };
+
+      baguette.imageCompression = {
+        level = mkOption {
+          type = types.ints.between 1 19;
+          default = 3;
+          description = "Set the zstd compression level of the base image.";
+        };
+        threads = mkOption {
+          type = types.ints.unsigned;
+          default = 0;
+          description = "Set the compression worker count. Use zero for all CPUs.";
+        };
       };
 
       virtualisation.buildMemorySize = mkOption {
@@ -193,7 +207,7 @@
               options = overlayOptions;
             };
             ${ephemeral.stateMountPoint} = {
-              device = "/dev/vdb";
+              device = "/dev/vdc";
               fsType = "btrfs";
               options = [ "subvol=state" ];
             };
@@ -452,15 +466,64 @@
                 requiredSystemFeatures = [ ]; # Allow building even without kvm
               });
 
+            btrfsStateImage =
+              pkgs.runCommand "nixos-baguette-state"
+                {
+                  nativeBuildInputs = [
+                    pkgs.btrfs-progs
+                    pkgs.zstd
+                  ];
+                }
+                ''
+                  mkdir -p $out
+                  truncate -s 256M $out/baguette_state.img
+                  mkfs.btrfs -q -f -L baguette-state $out/baguette_state.img
+                  zstd -3 $out/baguette_state.img -o $out/baguette_state.img.zst
+                '';
+
             btrfsImageCompressed =
               pkgs.runCommand "nixos-baguette-btrfs-compressed"
                 {
-                  nativeBuildInputs = [ pkgs.zstd ];
+                  nativeBuildInputs = [
+                    pkgs.zstd
+                  ]
+                  ++ lib.optional ephemeral.enable (pkgs.python3.withPackages (ps: [ ps.pyzstd ]));
                 }
                 ''
                   mkdir -p $out
                   echo "Compressing btrfs image with zstd..."
-                  zstd -3 -T0 ${config.system.build.btrfsImage}/baguette_rootfs.img -o $out/baguette_rootfs.img.zst
+                  ${
+                    if ephemeral.enable then
+                      ''
+                        python3 - ${config.system.build.btrfsImage}/baguette_rootfs.img \
+                          "$out/baguette_rootfs.img.zst" ${toString config.baguette.imageCompression.level} \
+                          ${toString config.baguette.imageCompression.threads} <<'PY'
+                        import os
+                        import shutil
+                        import sys
+                        from pyzstd import CParameter, SeekableZstdFile
+
+                        options = {
+                            CParameter.compressionLevel: int(sys.argv[3]),
+                            CParameter.nbWorkers: int(sys.argv[4]) or os.cpu_count() or 1,
+                            CParameter.checksumFlag: 1,
+                        }
+                        # crosvm uses a 128 KiB decompression buffer.
+                        with open(sys.argv[1], "rb") as source, SeekableZstdFile(
+                            sys.argv[2], "wb", level_or_option=options,
+                            max_frame_content_size=128 * 1024,
+                        ) as destination:
+                            shutil.copyfileobj(source, destination)
+                        PY
+                        cp ${config.system.build.btrfsStateImage}/baguette_state.img.zst $out/
+                      ''
+                    else
+                      ''
+                        zstd -${toString config.baguette.imageCompression.level} \
+                          -T${toString config.baguette.imageCompression.threads} \
+                          ${config.system.build.btrfsImage}/baguette_rootfs.img -o $out/baguette_rootfs.img.zst
+                      ''
+                  }
                   echo "Compressed image created at $out/baguette_rootfs.img.zst"
                 '';
           };

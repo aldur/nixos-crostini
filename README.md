@@ -72,6 +72,9 @@ vmc start --vm-type BAGUETTE baguette
 
 Open new shell sessions with `vsh baguette penguin`.
 
+For a read-only base and a separate state disk, see the
+[ephemeral root guide](https://aldur.github.io/nixos-crostini/baguette-ephemeral-root.html).
+
 This [blog post][5] shows further ways to configure, run, and customize a
 Baguette NixOS image.
 

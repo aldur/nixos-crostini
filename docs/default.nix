@@ -67,6 +67,7 @@ let
   summary = pkgs.writeText "SUMMARY.md" (
     "# Summary\n\n- [Module reference](index.md)\n"
     + lib.concatMapStrings (name: "- [${name}](${name}.md)\n") (lib.attrNames references)
+    + "- [Baguette ephemeral root](baguette-ephemeral-root.md)\n"
   );
 in
 pkgs.runCommand "nixos-crostini-docs"
@@ -77,6 +78,7 @@ pkgs.runCommand "nixos-crostini-docs"
     mkdir -p book/src
     cp ${bookConfig} book/book.toml
     cp ${./index.md} book/src/index.md
+    cp ${./baguette-ephemeral-root.md} book/src/baguette-ephemeral-root.md
     cp ${summary} book/src/SUMMARY.md
     ${lib.concatStringsSep "\n" (
       lib.mapAttrsToList (name: reference: ''

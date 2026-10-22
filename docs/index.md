@@ -39,10 +39,10 @@ See the [account option](crostini.md#usersusersnamecrostinienable) for the regis
 
 Use your guest's option reference for types, defaults, and examples.
 
-| Task | Options |
+| Task | Documentation |
 | --- | --- |
 | Set Baguette image resources | [Disk size](baguette.md#virtualisationdiskimagesize), [build memory](baguette.md#virtualisationbuildmemorysize) |
-| Start Baguette with an ephemeral root | [Ephemeral root](baguette.md#baguetteephemeralrootenable) |
+| Start Baguette with an ephemeral root | [Ephemeral root guide](baguette-ephemeral-root.md) |
 | Run Wayland applications without X11 | [Baguette](baguette.md#crostinisommelierxwaylandenable), [LXC](crostini.md#crostinisommelierxwaylandenable) |
 | Remove optional command-line tools | [Baguette](baguette.md#crostiniextratoolsenable), [LXC](crostini.md#crostiniextratoolsenable) |
 | Control host forwarding in Baguette | [Ports](baguette.md#baguetteportlistenerenable), [notifications](baguette.md#baguettenotificationsenable) |

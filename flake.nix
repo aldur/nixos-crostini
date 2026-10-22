@@ -120,6 +120,9 @@
         baguette-ephemeral = import ./tests/baguette-ephemeral.nix { inherit (nixpkgs) lib; } {
           configuration = baguetteNixosFor system;
         };
+        baguette-root-guard = nixpkgs.legacyPackages.${system}.callPackage ./tests/baguette-root-guard.nix {
+          smoke = self.checks.${system}.baguette-ephemeral;
+        };
         guest-session = import ./tests/guest-session.nix { inherit nixpkgs system; };
         docs-contract = nixpkgs.legacyPackages.${system}.callPackage ./tests/docs.nix {
           inherit (self.packages.${system}) docs;

@@ -1,6 +1,6 @@
 # A guest smoke test, not a ChromeOS host integration test. Keep boot and
 # session startup unassisted; only the tools disk and compositor are fixtures.
-# Uses the distributed root image and a representative Termina kernel,
+# Uses the distributed images and a representative Termina kernel,
 # without an initrd. Exact host registration still requires ChromeOS.
 { lib }:
 let
@@ -57,6 +57,14 @@ let
     "sommelier-x@1.service"
   ];
   ephemeral = cfg.baguette.ephemeralRoot;
+  crosvm =
+    if ephemeral.enable then
+      pkgs.crosvm.overrideAttrs (old: {
+        cargoBuildFeatures = old.cargoBuildFeatures ++ [ "zstd-disk" ];
+        cargoCheckFeatures = old.cargoCheckFeatures ++ [ "zstd-disk" ];
+      })
+    else
+      pkgs.crosvm;
   mkProbe =
     extra:
     pkgs.writeShellScript "baguette-probe" ''
@@ -127,6 +135,14 @@ let
       echo "PROBE root $(findmnt -n -b -o FSTYPE,SIZE /)"
       ${lib.optionalString ephemeral.enable ''
         echo "PROBE state $(findmnt -n -b -o FSTYPE,SIZE ${lib.escapeShellArg ephemeral.stateMountPoint})"
+        echo "PROBE disks base=$(findmnt -n -o SOURCE /run/ephemeral/lower) state=$(findmnt -n -o SOURCE ${lib.escapeShellArg ephemeral.stateMountPoint})"
+        test "$(blockdev --getro /dev/vda)" = 1
+        blockdev --setrw /dev/vda || true
+        if printf 'base disk write probe\n' | dd of=/dev/vda bs=512 conv=sync,notrunc; then
+          echo 'FAIL: guest root can write to the base disk'
+          exit 1
+        fi
+        echo 'PROBE base disk rejects root writes'
       ''}
       echo "PROBE init $(readlink /sbin/init)"
       echo "PROBE usermod $(readlink /usr/sbin/usermod)"
@@ -254,6 +270,7 @@ let
       "unit systemd-timesyncd.service ${if cfg.services.timesyncd.enable then "active" else "inactive"}$"
       "virtwl user=allowed other=denied$"
     ]
+    ++ lib.optional ephemeral.enable "base disk rejects root writes$"
     ++ (
       [
         "failed \\[ *\\]"
@@ -275,7 +292,7 @@ assert lib.assertMsg (
 pkgs.runCommand name
   {
     nativeBuildInputs = [
-      pkgs.crosvm
+      crosvm
       pkgs.coreutils
       pkgs.weston
       pkgs.zstd
@@ -288,16 +305,33 @@ pkgs.runCommand name
         toolsDisk
         kernel
         shipped
+        crosvm
         ;
     };
   }
   ''
-    # Start from the same compressed artifact distributed to ChromeOS.
-    zstd -d ${shipped.btrfsImageCompressed}/baguette_rootfs.img.zst -o root.img
+    # Start from the same compressed artifacts distributed to ChromeOS.
+    ${
+      if ephemeral.enable then
+        ''
+          cp ${shipped.btrfsImageCompressed}/baguette_rootfs.img.zst root.img.zst
+          chmod u+w root.img.zst
+          sha256sum root.img.zst > root.sha256
+          zstd -d ${shipped.btrfsImageCompressed}/baguette_state.img.zst -o state.img
+          chmod u+w state.img
+          image_size=$(stat -c %s state.img)
+          truncate -s $((image_size + 2 * 1024 * 1024 * 1024)) state.img
+        ''
+      else
+        ''
+          zstd -d ${shipped.btrfsImageCompressed}/baguette_rootfs.img.zst -o root.img
+          chmod u+w root.img
+          image_size=$(stat -c %s root.img)
+          truncate -s $((image_size + 2 * 1024 * 1024 * 1024)) root.img
+        ''
+    }
     cp ${toolsDisk} tools.img
-    chmod u+w root.img tools.img
-    image_size=$(stat -c %s root.img)
-    truncate -s $((image_size + 2 * 1024 * 1024 * 1024)) root.img
+    chmod u+w tools.img
     touch weston.log
     # Nix shows only the last lines of a failed build. The verdict of
     # verify-boot.sh must come after the logs, and the console log must
@@ -343,17 +377,23 @@ pkgs.runCommand name
         --gpu backend=virglrenderer,context-types=cross-domain \
         --wayland-sock "$XDG_RUNTIME_DIR/wayland-host" \
         --params "$params" \
-        --block path=tools.img --block path=root.img \
+        ${lib.optionalString ephemeral.enable "--block path=root.img.zst,ro=true,root=true"} \
+        --block path=tools.img,ro=true --block path=${
+          if ephemeral.enable then "state" else "root"
+        }.img \
         ${kernel}/kernel > crosvm-$boot.log 2>&1 || vm_status=$?
       bash ${./verify-boot.sh} "$vm_status" probe-$boot.log "$checker" \
         ${kernel}/release "$image_size" ${if ephemeral.enable then "state" else "root"} \
         > verdict-$boot.log 2>&1 || status=1
+      ${lib.optionalString ephemeral.enable ''
+        sha256sum -c root.sha256 >> verdict-$boot.log 2>&1 || status=1
+      ''}
       [ "$status" -eq 0 ] || break
     done
     dump_logs
     mkdir "$out"
     cp *.log "$out/"
-    sha256sum ${shipped.btrfsImageCompressed}/baguette_rootfs.img.zst ${kernel}/kernel ${toolsDisk} > "$out/inputs.sha256"
+    sha256sum ${shipped.btrfsImageCompressed}/* ${kernel}/kernel ${toolsDisk} > "$out/inputs.sha256"
     cat verdict-*.log
     exit "$status"
   ''

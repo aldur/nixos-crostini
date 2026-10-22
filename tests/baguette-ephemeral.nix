@@ -42,7 +42,7 @@ let
       exit 1
     fi
     test "$(btrfs property get -ts /run/ephemeral/lower ro)" = ro=true
-    test "$(btrfs subvolume list /state | sed 's/.* path //' | sort)" = "$(printf 'rootfs_subvol\nstate')"
+    test "$(btrfs subvolume list /state | sed 's/.* path //')" = state
     echo 'PROBE ephemeral mounts'
 
     machine_id=$(cat /etc/machine-id)
