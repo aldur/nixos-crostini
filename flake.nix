@@ -40,7 +40,12 @@
         }:
         nixosSystemFor {
           inherit targetSystem;
-          additionalModules = [ self.nixosModules.baguette ];
+          additionalModules = [
+            self.nixosModules.baguette
+            # Users download the CI image. Level 19 makes it about 22%
+            # smaller than level 3 and takes some minutes longer to build.
+            { baguette.imageCompression.level = 19; }
+          ];
         };
 
       crostiniSystem =
