@@ -9,7 +9,20 @@
       ...
     }@inputs:
     let
-      modules = [ ./configuration.nix ];
+      modules = [
+        ./configuration.nix
+        {
+          # Pin `nixpkgs` to the locked revision, not to its store path.
+          # The image then does not contain the source (200 MiB). Nix
+          # fetches it at first use.
+          nix.registry.nixpkgs.to = {
+            type = "github";
+            owner = "NixOS";
+            repo = "nixpkgs";
+            inherit (nixpkgs) rev narHash;
+          };
+        }
+      ];
 
       # https://nixos-and-flakes.thiscute.world/nixos-with-flakes/nixos-flake-and-module-system
       specialArgs = { inherit inputs; };
