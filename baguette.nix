@@ -19,8 +19,7 @@
     ++ ephemeral.mountOptions;
     # Without an initrd, `init` is stage 2. A systemd initrd uses
     # `prepare-root` instead, leaving `init` for systemd itself.
-    initScript =
-      if config.boot.initrd.enable && config.boot.initrd.systemd.enable then "prepare-root" else "init";
+    initScript = if config.boot.initrd.enable then "prepare-root" else "init";
     ephemeralInit = pkgs.replaceVarsWith {
       src = ./ephemeral-init.sh;
       isExecutable = true;
@@ -342,7 +341,6 @@
               else
                 resizeCommand + "\n"
             )
-            # Re-link the initScript (in case of toggling `boot.initrd.systemd.enable` or `boot.initrd.enable`)
             + ''
               ln -sf "$systemConfig/${imageInit}" /sbin/init
             ''

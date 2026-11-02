@@ -25,6 +25,13 @@ let
     };
   };
   valid = make ../baguette.nix [ settings ];
+  withInitrd = make ../baguette.nix [
+    settings
+    {
+      boot.kernel.enable = true;
+      boot.initrd.enable = true;
+    }
+  ];
   minimalSettings.crostini = {
     sommelier.xwayland.enable = false;
     extraTools.enable = false;
@@ -119,6 +126,8 @@ let
   shared = import ./lib.nix { inherit lib; };
 in
 assert failures valid == [ ];
+assert failures withInitrd == [ ];
+assert builtins.isString withInitrd.system.build.toplevel.drvPath;
 assert !valid.baguette.ephemeralRoot.persistMachineId;
 assert !valid.services.timesyncd.enable;
 assert !valid.boot.kexec.enable;
