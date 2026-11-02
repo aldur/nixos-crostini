@@ -1,0 +1,42 @@
+gtk-icon-theme-name = "Adwaita"
+gtk-theme-name = "Raleigh"
+gtk-cursor-theme-name = "Adwaita"
+gtk-button-images = 0
+gtk-auto-mnemonics = 1
+style "crostini-flat" {
+  font_name = "Sans 11"
+  xthickness = 0
+  ythickness = 0
+  fg[NORMAL] = "#202124"
+  fg[PRELIGHT] = "#202124"
+  fg[ACTIVE] = "#202124"
+  fg[INSENSITIVE] = "#9aa0a6"
+  fg[SELECTED] = "#ffffff"
+  bg[NORMAL] = "#f8f9fa"
+  bg[PRELIGHT] = "#e8f0fe"
+  bg[ACTIVE] = "#d2e3fc"
+  bg[INSENSITIVE] = "#f1f3f4"
+  bg[SELECTED] = "#1a73e8"
+  text[NORMAL] = "#202124"
+  text[INSENSITIVE] = "#9aa0a6"
+  text[SELECTED] = "#ffffff"
+  base[NORMAL] = "#ffffff"
+  base[INSENSITIVE] = "#f1f3f4"
+  base[SELECTED] = "#1a73e8"
+  GtkWidget::focus-line-width = 1
+  GtkWidget::focus-line-pattern = ""
+  GtkWidget::focus-padding = 2
+  GtkButton::inner-border = { 12, 12, 6, 6 }
+  GtkButton::default-border = { 0, 0, 0, 0 }
+  GtkButton::default-outside-border = { 0, 0, 0, 0 }
+  GtkButton::child-displacement-x = 0
+  GtkButton::child-displacement-y = 0
+  GtkEntry::inner-border = { 8, 8, 6, 6 }
+}
+class "GtkWidget" style "crostini-flat"
+style "crostini-button" = "crostini-flat" {
+  bg[NORMAL] = "#e8eaed"
+  bg[PRELIGHT] = "#d2e3fc"
+  bg[ACTIVE] = "#aecbfa"
+}
+class "GtkButton" style "crostini-button"

@@ -103,7 +103,7 @@ in
         description = ''
           Use the ChromeOS GTK themes, icons, and cursors.
           ChromeOS supplies CrosAdapta for GTK 3 at `/opt/google/cros-containers/cros-adapta`.
-          Use GTK 2's built-in Raleigh theme.
+          Use a flat style with GTK 2's built-in theme.
         '';
       };
 
@@ -212,11 +212,7 @@ in
 
         # Legacy applications use GTK 2's built-in theme without extra engines.
         "gtk-2.0/gtkrc" = lib.mkIf config.crostini.ui.enable {
-          text = ''
-            gtk-icon-theme-name = "Adwaita"
-            gtk-theme-name = "Raleigh"
-            gtk-cursor-theme-name = "Adwaita"
-          '';
+          source = ./gtk2.gtkrc;
         };
         "xdg/gtk-3.0/settings.ini" = lib.mkIf config.crostini.ui.enable {
           text = ''
