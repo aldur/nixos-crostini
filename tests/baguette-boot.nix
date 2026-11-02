@@ -4,9 +4,9 @@
 # flake.nix exports this function as `lib.mkBaguetteTest`.
 #
 # The image has no kernel: Baguette boots the ChromeOS kernel. The test
-# boots the image with the kernel and the initrd of the same configuration,
-# with `boot.kernel` and `boot.initrd` turned back on. The disk is the image
-# CI ships, unchanged.
+# boots the image with the kernel and a systemd initrd from the same
+# configuration, with `boot.kernel` and `boot.initrd` enabled. The disk
+# is the image that CI ships, unchanged.
 #
 # ChromeOS mounts a `cros-vm-tools` disk with maitred, vshd, garcon, and
 # sommelier. Those binaries are not public. The test mounts a disk with that
@@ -125,11 +125,6 @@ let
         {
           boot.kernel.enable = lib.mkForce true;
           boot.initrd.enable = lib.mkForce true;
-          # The scripted initrd: it hands over to the `init=` of the kernel
-          # command line, which points into the image. The systemd initrd
-          # wants a `prepare-root` there instead, which an image without
-          # an initrd does not have.
-          boot.initrd.systemd.enable = lib.mkForce false;
           # The image loads no modules of its own: the ChromeOS kernel has
           # them built in. The initrd loads the ones the guest needs from
           # the NixOS kernel: virtio-gpu for the GBM device of sommelier,
@@ -139,14 +134,47 @@ let
             "fuse"
             "overlay"
           ];
-          boot.initrd.postMountCommands = ''
-            set -- $targetRoot
-            ${injectUnits}
-          '';
+          boot.initrd.systemd.services = {
+            baguette-test-setup = {
+              requires = [ "dev-vda.device" ];
+              after = [ "dev-vda.device" ];
+              requiredBy = [ "initrd-find-nixos-closure.service" ];
+              before = [ "initrd-find-nixos-closure.service" ];
+              unitConfig = {
+                DefaultDependencies = false;
+                RequiresMountsFor = "/sysroot";
+              };
+              path = [
+                pkgs.coreutils
+                pkgs.util-linux
+              ];
+              serviceConfig = {
+                Type = "oneshot";
+                RemainAfterExit = true;
+              };
+              script = ''
+                set -- /sysroot
+                ${injectUnits}
+              '';
+            };
+            # The image without an initrd has `init` instead of `prepare-root`.
+            # Follow its link on both boots to activate the selected generation.
+            initrd-nixos-activation = {
+              environment.IN_NIXOS_SYSTEMD_STAGE1 = "true";
+              path = [ pkgs.coreutils ];
+              script = lib.mkForce ''
+                exec chroot /sysroot /sbin/init
+              '';
+            };
+            # Switch to the systemd binary after the activation script ends.
+            initrd-switch-root.serviceConfig.ExecStart = lib.mkForce [
+              ""
+              "systemctl --no-block switch-root /sysroot /run/current-system/systemd/lib/systemd/systemd"
+            ];
+          };
         }
-        # preservation asserts a systemd initrd. This variant only lends
-        # its kernel and initrd; the image keeps its own preservation. The
-        # shipped configuration tells whether the option exists at all.
+        # The image keeps its own preservation. This variant supplies only
+        # the kernel and initrd. Check the image for this optional module.
         // lib.optionalAttrs (configuration.config ? preservation) {
           preservation.enable = lib.mkForce false;
         }
@@ -713,11 +741,7 @@ let
 
   checkProbes = boot: shared.mkCheckProbes pkgs (checksFor boot);
 
-  initScript =
-    if configuration.config.boot.initrd.enable && configuration.config.boot.initrd.systemd.enable then
-      "prepare-root"
-    else
-      "init";
+  initScript = if configuration.config.boot.initrd.enable then "prepare-root" else "init";
 in
 pkgs.runCommand name
   {
@@ -777,7 +801,7 @@ pkgs.runCommand name
     # One boot of the disk, with the checks for the generation it boots.
     # ttyS0 is the console, ttyS1 the probe output. No getty on ttyS0: it
     # would take the console away. The GPU gives the guest a render node,
-    # which sommelier needs. The kernel starts /sbin/init, as the kernel
+    # which sommelier needs. The initrd follows /sbin/init, as the kernel
     # of ChromeOS does.
     status=0
     boot() {
@@ -794,7 +818,7 @@ pkgs.runCommand name
         --gpu backend=virglrenderer,context-types=cross-domain \
         --wayland-sock $XDG_RUNTIME_DIR/wayland-host \
         --initrd ${bootVariant.config.system.build.initialRamdisk}/initrd \
-        --params "init=/sbin/init console=ttyS0 loglevel=4 systemd.getty_auto=no" \
+        --params "init=/sbin/init rw console=ttyS0 loglevel=4 systemd.getty_auto=no" \
         --block path=tools.img --block path=root.img \
         ${bootVariant.config.system.build.kernel}/${bootVariant.config.system.boot.loader.kernelFile} \
         > crosvm-$n.log 2>&1 || {
