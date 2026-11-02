@@ -32,14 +32,14 @@ scale() {
 
 screenshots=$1
 declare -A size
-for slug in gtk2-normal gtk2-low gtk3-normal gtk3-low; do
+for slug in gtk3-x11-normal gtk3-x11-low gtk3-wayland-normal gtk3-wayland-low; do
   # The closing quote of the title keeps `DISPLAY` apart from
   # `DISPLAY_LOW_DENSITY` in the scene graph.
   case $slug in
-    gtk2-normal) title="Baguette GTK2 DISPLAY'" ;;
-    gtk2-low) title="Baguette GTK2 DISPLAY_LOW_DENSITY'" ;;
-    gtk3-normal) title="Baguette GTK3 WAYLAND_DISPLAY'" ;;
-    gtk3-low) title="Baguette GTK3 WAYLAND_DISPLAY_LOW_DENSITY'" ;;
+    gtk3-x11-normal) title="Baguette GTK3 DISPLAY'" ;;
+    gtk3-x11-low) title="Baguette GTK3 DISPLAY_LOW_DENSITY'" ;;
+    gtk3-wayland-normal) title="Baguette GTK3 WAYLAND_DISPLAY'" ;;
+    gtk3-wayland-low) title="Baguette GTK3 WAYLAND_DISPLAY_LOW_DENSITY'" ;;
   esac
   directory="$screenshots/$slug"
   mkdir -p "$directory"

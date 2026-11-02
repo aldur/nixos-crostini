@@ -54,6 +54,8 @@ jobs:
       - run: nix flake check --no-build
       - name: Check the guest session contract and boot log verifier
         run: nix build --no-link ".#checks.$CROSTINI_TEST_SYSTEM.guest-session" ".#checks.$CROSTINI_TEST_SYSTEM.boot-verifier"
+      - name: Check GTK over X11 and Wayland
+        run: nix build -L --no-link ".#checks.$CROSTINI_TEST_SYSTEM.gtk-ui"
       - name: Check workflows and build the module reference
         if: matrix.system == 'x86_64-linux'
         run: |

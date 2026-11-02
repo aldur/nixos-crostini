@@ -201,14 +201,10 @@ let
   # ChromeOS mounts the CrosAdapta theme with the tools. The tools disk of
   # the test carries the same theme, so GTK 3 finds it through the link of
   # the UI integration.
-  crosAdapta = pkgs.fetchgit {
-    url = "https://chromium.googlesource.com/chromiumos/third_party/cros-adapta";
-    rev = "fe8ed49919cd9f6ce0efe86813a388d90e7314b6";
-    hash = "sha256-cfWlo4lYVTXp4QcI3Ylw2Tj16//Hds156tJqBC2QF1c=";
-  };
+  crosAdapta = pkgs.callPackage ./cros-adapta.nix { };
 
-  # The GTK 2 and GTK 3 clients of the probe, one binary each.
-  gtkWindows =
+  # Use one GTK 3 client for both X11 and Wayland.
+  gtkWindow =
     pkgs.runCommand "baguette-gtk-windows"
       {
         nativeBuildInputs = [
@@ -216,14 +212,11 @@ let
           pkgs.pkg-config
         ];
         buildInputs = [
-          pkgs.gtk2
           pkgs.gtk3
         ];
       }
       ''
         mkdir -p $out/bin
-        cc -Wall -Wno-deprecated-declarations $(pkg-config --cflags gtk+-2.0) \
-          ${./gtk2-window.c} $(pkg-config --libs gtk+-2.0) -o $out/bin/gtk2-window
         cc -Wall $(pkg-config --cflags gtk+-3.0) \
           ${./gtk3-window.c} $(pkg-config --libs gtk+-3.0) -o $out/bin/gtk3-window
       '';
@@ -403,21 +396,17 @@ let
     done
 
     ${lib.optionalString checkUi ''
-      # A window on the display a variable names, from a login shell with
-      # the theme of the image, and with fatal warnings. The tools disk
-      # supplies the client, but no theme or theme engine. The name of the
-      # probe line ends in the GTK version, and the window carries the
-      # name of the variable, so the capture on the host tells the
-      # instances apart.
+      # Use a login shell with the image's theme settings and fatal warnings.
+      # The window title identifies the display variable for the host capture.
       gtk_window() {
-        local probe=$1 var=$2 toolkit=''${1##*gtk} display export_display result
+        local probe=$1 var=$2 display export_display result
         display=$(manager_var as_user $var)
         case $var in
           WAYLAND_*) export_display='export GDK_BACKEND=wayland WAYLAND_DISPLAY="$GTK_PROBE_DISPLAY"' ;;
-          *) export_display='export DISPLAY="$GTK_PROBE_DISPLAY"' ;;
+          *) export_display='export GDK_BACKEND=x11 DISPLAY="$GTK_PROBE_DISPLAY"' ;;
         esac
         if as_user env GTK_PROBE_DISPLAY=$display GTK_PROBE_LABEL=$var G_DEBUG=fatal-warnings \
-          timeout 20 bash -l -c "$export_display; exec ${gtkWindows}/bin/gtk$toolkit-window" \
+          timeout 20 bash -l -c "$export_display; exec ${gtkWindow}/bin/gtk3-window" \
           > /tmp/gtk-window.log 2>&1; then
           result=ok
         else
@@ -426,12 +415,11 @@ let
         cat /tmp/gtk-window.log
         echo "PROBE $probe $var $display $result"
       }
-      # The X path with GTK 2, and the Wayland path with GTK 3 on the
-      # socket of each parent sommelier, with the theme of the host mount.
-      gtk_window gtk2 DISPLAY
-      gtk_window gtk2 DISPLAY_LOW_DENSITY
-      gtk_window gtk3 WAYLAND_DISPLAY
-      gtk_window gtk3 WAYLAND_DISPLAY_LOW_DENSITY
+      # Check both protocols on each instance with the theme of the host mount.
+      gtk_window gtk3-x11 DISPLAY
+      gtk_window gtk3-x11 DISPLAY_LOW_DENSITY
+      gtk_window gtk3-wayland WAYLAND_DISPLAY
+      gtk_window gtk3-wayland WAYLAND_DISPLAY_LOW_DENSITY
       for unit in sommelier@0.service sommelier@1.service sommelier-x@0.service sommelier-x@1.service; do
         echo "PROBE after-gui $unit $(as_user systemctl --user is-active $unit) restarts=$(as_user systemctl --user show $unit -p NRestarts --value)"
         journalctl --no-pager -o cat _SYSTEMD_USER_UNIT=$unit | tail -n 10
@@ -551,8 +539,8 @@ let
 
     ${lib.optionalString checkUi ''
       # A window on each display the switch left.
-      gtk_window switch-gtk2 DISPLAY
-      gtk_window switch-gtk2 DISPLAY_LOW_DENSITY
+      gtk_window switch-gtk3-x11 DISPLAY
+      gtk_window switch-gtk3-x11 DISPLAY_LOW_DENSITY
     ''}
 
     ${shared.probeTail extraProbe}
@@ -573,7 +561,7 @@ let
   # of the image, at the same paths. The tools disk carries the rest, and
   # the overlay unit above puts it under /nix/store. Mesa is the GBM
   # backend of sommelier, which the image does not ship. xdpyinfo and the
-  # GTK2 probe are test clients; the theme engine must come from the image.
+  # GTK probe are test clients; theme settings come from the image.
   toolsClosure = pkgs.closureInfo {
     rootPaths = [
       sommelier
@@ -583,7 +571,7 @@ let
       pkgs.xdpyinfo
       nextToplevel
     ]
-    ++ lib.optional checkUi gtkWindows;
+    ++ lib.optional checkUi gtkWindow;
   };
   imageClosure = pkgs.closureInfo { rootPaths = [ shipped.toplevel ]; };
 
@@ -716,10 +704,10 @@ let
     ++ lib.optionals checkUi [
       # The theme variables of the UI integration reach the login shell.
       "login-theme GTK2_RC_FILES=/etc/gtk-2.0/gtkrc GTK_DATA_PREFIX=/run/current-system/sw XCURSOR_THEME=Adwaita $"
-      "gtk2 DISPLAY :[0-9]+ ok$"
-      "gtk2 DISPLAY_LOW_DENSITY :[0-9]+ ok$"
-      "gtk3 WAYLAND_DISPLAY wayland-0 ok$"
-      "gtk3 WAYLAND_DISPLAY_LOW_DENSITY wayland-1 ok$"
+      "gtk3-x11 DISPLAY :[0-9]+ ok$"
+      "gtk3-x11 DISPLAY_LOW_DENSITY :[0-9]+ ok$"
+      "gtk3-wayland WAYLAND_DISPLAY wayland-0 ok$"
+      "gtk3-wayland WAYLAND_DISPLAY_LOW_DENSITY wayland-1 ok$"
       "after-gui sommelier@0.service active restarts=0$"
       "after-gui sommelier@1.service active restarts=0$"
       "after-gui sommelier-x@0.service active restarts=0$"
@@ -728,14 +716,14 @@ let
       # instance sees a screen with half the pixels, so its window takes
       # twice the size on the host. These lines come from the capture
       # beside crosvm.
-      "host-window gtk2-normal [0-9]+x[0-9]+$"
-      "host-window gtk2-low [0-9]+x[0-9]+$"
-      "host-window gtk3-normal [0-9]+x[0-9]+$"
-      "host-window gtk3-low [0-9]+x[0-9]+$"
-      "host-scale gtk2 2x2$"
-      "host-scale gtk3 2x2$"
-      "switch-gtk2 DISPLAY :[0-9]+ ok$"
-      "switch-gtk2 DISPLAY_LOW_DENSITY :[0-9]+ ok$"
+      "host-window gtk3-x11-normal [0-9]+x[0-9]+$"
+      "host-window gtk3-x11-low [0-9]+x[0-9]+$"
+      "host-window gtk3-wayland-normal [0-9]+x[0-9]+$"
+      "host-window gtk3-wayland-low [0-9]+x[0-9]+$"
+      "host-scale gtk3-x11 2x2$"
+      "host-scale gtk3-wayland 2x2$"
+      "switch-gtk3-x11 DISPLAY :[0-9]+ ok$"
+      "switch-gtk3-x11 DISPLAY_LOW_DENSITY :[0-9]+ ok$"
     ]
     ++ extraChecks;
 
@@ -829,7 +817,7 @@ pkgs.runCommand name
 
       ${lib.optionalString checkUi ''
         # The VM has stopped, so a missing screenshot cannot arrive later.
-        for slug in gtk2-normal gtk2-low gtk3-normal gtk3-low; do
+        for slug in gtk3-x11-normal gtk3-x11-low gtk3-wayland-normal gtk3-wayland-low; do
           [ -s screenshots/boot-$n/$slug.png ] && continue
           echo "FAIL: window $slug of boot $n was not captured"
           kill $capture 2>/dev/null || true

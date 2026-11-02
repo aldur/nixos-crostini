@@ -33,8 +33,6 @@ let
   };
 
   # Expose the CrosAdapta theme to GTK 3 through XDG_DATA_DIRS.
-  # GTK 2 instead uses Adwaita, because nixpkgs has dropped support for the
-  # rendering engine required by CrosAdapt.
   cros-ui-config = pkgs.runCommand "cros-ui-config" { } ''
     mkdir -p $out/share/themes
     ln -s /opt/google/cros-containers/cros-adapta $out/share/themes/CrosAdapta
@@ -105,7 +103,7 @@ in
         description = ''
           Use the ChromeOS GTK themes, icons, and cursors.
           ChromeOS supplies CrosAdapta for GTK 3 at `/opt/google/cros-containers/cros-adapta`.
-          Use Adwaita for GTK 2.
+          Use GTK 2's built-in Raleigh theme.
         '';
       };
 
@@ -177,9 +175,6 @@ in
       ++ lib.optionals config.crostini.ui.enable [
         cros-ui-config
         config.crostini.ui.adwaita
-        (pkgs.gnome-themes-extra.override {
-          adwaita-icon-theme = config.crostini.ui.adwaita;
-        })
       ];
 
       sessionVariables = lib.mkIf config.crostini.ui.enable {
@@ -215,11 +210,11 @@ in
           '';
         };
 
-        # Use nixpkgs' GTK 2 theme and engine; keep CrosAdapta for GTK 3.
+        # Legacy applications use GTK 2's built-in theme without extra engines.
         "gtk-2.0/gtkrc" = lib.mkIf config.crostini.ui.enable {
           text = ''
             gtk-icon-theme-name = "Adwaita"
-            gtk-theme-name = "Adwaita"
+            gtk-theme-name = "Raleigh"
             gtk-cursor-theme-name = "Adwaita"
           '';
         };
@@ -311,7 +306,6 @@ in
               BROWSER = lib.getExe' cros-container-guest-tools "garcon-url-handler";
               NCURSES_NO_UTF8_ACS = "1";
               QT_AUTO_SCREEN_SCALE_FACTOR = "1";
-              QT_QPA_PLATFORMTHEME = "gtk2";
               XCURSOR_THEME = "Adwaita";
               XDG_CONFIG_HOME = "%h/.config";
               XDG_CURRENT_DESKTOP = "X-Generic";

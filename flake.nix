@@ -142,6 +142,9 @@
           smoke = self.checks.${system}.baguette-ephemeral;
         };
         guest-session = import ./tests/guest-session.nix { inherit nixpkgs system; };
+        gtk-ui = import ./tests/gtk-ui.nix {
+          configuration = baguetteNixosFor system;
+        };
         docs-contract = nixpkgs.legacyPackages.${system}.callPackage ./tests/docs.nix {
           inherit (self.packages.${system}) docs;
           modules = self.nixosModules;
