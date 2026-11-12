@@ -48,7 +48,7 @@ jobs:
           ls -l /dev/kvm || true
           test -c /dev/kvm
           sudo chmod a+rw /dev/kvm
-      - uses: DeterminateSystems/determinate-nix-action@92957199488000b908fdad19f63711000965d8f3 # v3.24.1
+      - uses: DeterminateSystems/determinate-nix-action@16f94ba7aae399b9f9077c254b6719ec6de7e3e3 # v3.24.2
       - uses: DeterminateSystems/flake-checker-action@786422608c7bded2bbc9741ad9f91356842bf520 # v14
 
       - run: nix flake check --no-build
